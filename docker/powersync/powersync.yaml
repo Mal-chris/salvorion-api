@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://unpkg.com/@powersync/service-schema@latest/json-schema/powersync-config.json
+#
+# PowerSync Service configuration for local development.
+# `!env NAME` substitutes an environment variable; only PS_* names are allowed.
+# Values are injected from docker-compose.yml.
+
+telemetry:
+  disable_telemetry_sharing: true
+
+# Source database (logical replication via the `powersync` role).
+replication:
+  connections:
+    - type: postgresql
+      uri: !env PS_DATA_SOURCE_URI
+      sslmode: disable
+
+# Sync-bucket storage on Postgres (no MongoDB needed).
+storage:
+  type: postgresql
+  uri: !env PS_STORAGE_SOURCE_URI
+  sslmode: disable
+
+port: !env PS_PORT
+
+# Sync Streams definitions (relative to this file).
+sync_config:
+  path: sync-config.yaml
+
+# Client (end-user) JWT verification. Phoenix will expose a JWKS endpoint once
+# Guardian is configured with an asymmetric key (see docs/DECISIONS.md).
+# The service starts fine even while this URL is unreachable; it is only
+# fetched when a client presents a token.
+client_auth:
+  jwks_uri: !env PS_JWKS_URL
+  audience: ["powersync"]
+
+healthcheck:
+  probes:
+    use_http: true

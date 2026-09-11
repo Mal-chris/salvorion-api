@@ -1,0 +1,90 @@
+# Salvorion local development stack.
+#
+# Every ${VAR:-default} below is documented in .env.example. Defaults are
+# dev-only values; copy .env.example to .env to override any of them.
+#
+#   docker compose up -d        start everything
+#   docker compose ps           check health status
+#   docker compose down -v      stop and wipe the Postgres volume
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: salvorion-postgres
+    restart: unless-stopped
+    # wal_level=logical is REQUIRED for PowerSync's logical-replication
+    # connection. Without it the powersync container starts but never syncs.
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-salvorion_dev}
+      # Consumed by docker/postgres/init/01-powersync.sh
+      POWERSYNC_DB_USER: ${POWERSYNC_DB_USER:-powersync}
+      POWERSYNC_DB_PASSWORD: ${POWERSYNC_DB_PASSWORD:-powersync}
+      POWERSYNC_STORAGE_DB: ${POWERSYNC_STORAGE_DB:-powersync_storage}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init scripts run once, only when the data volume is empty.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-salvorion_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  powersync:
+    # PowerSync Service (Open Edition), self-hosted.
+    # Pinned to an exact version; bump deliberately.
+    image: journeyapps/powersync-service:1.26.0
+    container_name: salvorion-powersync
+    restart: unless-stopped
+    # "unified" runs the API server and the replication worker in one container.
+    command: ["start", "-r", "unified"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/powersync.yaml
+      NODE_OPTIONS: --max-old-space-size=1000
+      # Only PS_* variables can be substituted into powersync.yaml via !env.
+      # Source database: replicated from via the `powersync` role.
+      PS_DATA_SOURCE_URI: postgresql://${POWERSYNC_DB_USER:-powersync}:${POWERSYNC_DB_PASSWORD:-powersync}@postgres:5432/${POSTGRES_DB:-salvorion_dev}
+      # Bucket storage: a separate database on the same Postgres 16 server
+      # (PowerSync permits sharing a server from Postgres 14+), so no MongoDB.
+      PS_STORAGE_SOURCE_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POWERSYNC_STORAGE_DB:-powersync_storage}
+      PS_PORT: ${POWERSYNC_PORT:-8080}
+      # Will point at Phoenix's JWKS endpoint once Guardian is configured.
+      PS_JWKS_URL: ${POWERSYNC_JWKS_URL:-http://host.docker.internal:4000/.well-known/jwks.json}
+      # PS_LOG_LEVEL: info
+    ports:
+      - "${POWERSYNC_PORT:-8080}:${POWERSYNC_PORT:-8080}"
+    volumes:
+      - ./docker/powersync:/config:ro
+    extra_hosts:
+      # Lets the container reach a Phoenix server running on the WSL host.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:${POWERSYNC_PORT:-8080}/probes/liveness').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+        ]
+      interval: 5s
+      timeout: 2s
+      retries: 15
+
+  gotenberg:
+    # PDF rendering service. Not integrated yet; just provisioned.
+    image: gotenberg/gotenberg:8
+    container_name: salvorion-gotenberg
+    restart: unless-stopped
+    ports:
+      - "${GOTENBERG_PORT:-3000}:3000"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://unpkg.com/@powersync/service-sync-rules@latest/schema/sync_rules.json
+#
+# PLACEHOLDER Sync Streams file. This is a minimal valid configuration that
+# syncs NOTHING. Real stream definitions are added in a later step, once the
+# domain schema is in place. See https://docs.powersync.com/sync/streams/overview
+#
+# Note: changes here are not hot-reloaded; restart the powersync container.
+
+config:
+  edition: 3
+
+streams: {}
