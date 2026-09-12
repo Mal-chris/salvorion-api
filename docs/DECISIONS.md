@@ -1,7 +1,7 @@
 # Decisions and notes for upcoming work
 
-Recorded during project scaffolding so they are not lost. None of these are
-implemented yet.
+Recorded during project scaffolding so they are not lost. Each section names
+the prompt that implemented it, or says it is pending.
 
 ## Guardian must use an asymmetric signing key (RS256 or ES256)
 
@@ -21,6 +21,18 @@ client-generated `client_uuid` on each write for idempotency. The write
 endpoints must therefore treat `client_uuid` as an idempotency key and return
 success for replays of an already-applied write.
 
+## Roster (Prompt 4): synthetic ID generation is not safe under concurrent runs
+
+The synthetic roster provider numbers `SYN-`-prefixed `id_number`s from the
+current maximum already in the table. Two synthetic-generation runs
+executing at the same instant could both read the same maximum and assign
+the same `id_number` to two different generated people; since
+`upsert_person_by_id_number/2` matches on `id_number`, the second run's
+write would then overwrite the first run's person rather than fail or
+duplicate. Accepted as-is: this is a dev-only tool, run by one person at a
+time, not a production data path. Not something to fix unless synthetic
+generation is ever automated or run concurrently.
+
 ## Starting/closing an activation is OSH Officer only, not System Administrator
 
 Per Document 10 (Security Design), section 1: the RBAC matrix lists "Start
@@ -34,6 +46,18 @@ routes (a later prompt) must not default to "same access as everything
 else OSH Officer can do" — System Administrator does not get a pass on
 starting or closing an activation, even though it does on almost every
 other OSH-managed resource.
+
+## Settings (Prompt 6): audit rows for settings carry the key in the payload
+
+`Salvorion.Settings.Setting` has a string `key` as its primary key, not a
+uuid — there is no `id` to hang an `entity_id` on. `put_setting/3` therefore
+writes its audit row via `Audit.record/1` directly, with `entity_id: nil`
+and the setting's `key` carried in the `after` (and `before`) payload
+instead, rather than going through the `Salvorion.Audit.Multi.audit/7`
+convention every other context uses (which assumes the changed entity has
+an `id`). A caller looking up a setting's audit history filters
+`Audit.list_audit_logs/1` by `entity_type: "setting"` and reads the key out
+of the payload, not by `entity_id`.
 
 ## Accountability core (Prompt 6): expectation rules for Release 1
 
@@ -119,6 +143,122 @@ exactly as before. Deleting and rebuilding a `PersonStatus` row reproduces
 it field-for-field, including `contradiction_resolved_at`. (An earlier
 draft set the column directly and documented it as the one field a rebuild
 could not recover; that gap is closed.)
+
+## Roll-call and dashboard reads (Prompt 7): a warden's scope is fixed at activation start
+
+`Accounts.effective_warden_assignments/2` is always called with the
+activation's `started_at` as `as_of`, never `DateTime.utc_now/0`. A warden's
+zone/area scope for the whole activation is therefore fixed the instant the
+drill starts; adding, ending, or changing a `WardenAssignment` mid-drill
+never shifts who that warden already sees, for better or worse (a warden
+reassigned mid-drill keeps seeing their original list for that drill). This
+was a judgment call favouring predictability during an active incident over
+reacting to admin changes mid-drill.
+
+## Roll-call and dashboard reads (Prompt 7): "in scope" — roster location OR an event in this activation
+
+A person is in scope for a warden (or a zone drill-down via
+`list_roll_call_for_zone/2`) during an activation if EITHER:
+
+1. their roster location touches it — any of `Scope.person_areas/1` (usual
+   area, plus every area linked via `department_areas` to any of their
+   departments) is in the warden's `area_ids`; OR
+2. any of their events **in this activation** carries an `area_id` in the
+   warden's `area_ids`, or an `assembly_point_id` belonging to a zone in the
+   warden's `zone_ids`.
+
+Rule 2 exists because rule 1 alone only ever surfaces people with roster
+location data — staff, essentially. A student under `"signed_in_only"` (not
+expected in advance, so no roster-derived scope membership) or a visitor
+(no roster location at all) would otherwise never appear on *any* warden's
+list, even standing in front of them having just signed in. Rule 2 puts
+them on the list of the warden at the assembly point (or area) where they
+actually turned up, which is what FR-ROLL-01/02 actually need: the warden
+present at that location needs to see and be able to act on that person.
+
+The same duality shapes the `{:person_status_updated, ...}` broadcast's
+`zone_ids` (Task 5): they are the union of the person's roster-attributed
+zones (`Scope.person_zone_ids/1`) and the zone(s) the triggering event's own
+location resolves to (`Scope.event_zone_ids/1`) — the literal task wording
+("zones the person is attributed to") would, read narrowly as roster-only,
+silently drop every walk-in from the broadcast's intended fan-out; that
+would defeat the stated purpose of letting a future Channel notify the
+right wardens.
+
+## Roll-call and dashboard reads (Prompt 7, follow-up): the after-commit broadcast guarantee is enforced, not assumed
+
+The guarantee: `ingest_event/2` and `resolve_contradiction/3` each broadcast
+`{:person_status_updated, ...}` strictly after their own transaction
+commits, never from inside it, so a subscriber can never observe a message
+for a write that then rolls back. That held by construction when each
+function was the outermost `Repo.transaction/1` call — but nothing stopped
+a caller from wrapping one in an *enclosing* transaction of its own. In
+that shape the inner call's `{:ok, ...}` return does not mean "committed"
+(Ecto runs an ordinary nested `Repo.transaction` as part of the same
+underlying database transaction, no savepoint), yet the broadcast — a
+plain message send, unrelated to Postgres commit timing — fires
+immediately regardless of what the enclosing transaction does afterward.
+Wrapped that way, the guarantee silently breaks.
+
+The guard: both functions now call `Repo.in_transaction?()` first and
+`raise ArgumentError` if it is true, naming the function and explaining
+why (it manages its own transaction and broadcasts only after that
+transaction commits, so it cannot safely run inside a caller's own
+transaction) and what to do instead (ingest one event per call). This
+turns a silent correctness gap into a loud, immediate failure at the call
+site, the same day the mistake is made, rather than a subtle "the
+dashboard didn't update for that one event" bug report much later.
+
+The consequence: the future offline-upload endpoint, which receives a
+batch of queued events from one device, must call `ingest_event/2` once
+per event — never wrap the whole batch in one `Repo.transaction/1` and
+call it in a loop. This is not a new constraint the guard imposes for its
+own sake: per-event idempotency (`client_uuid`, I3) and partial-success
+reporting (some events in a batch succeed, one fails validation, the
+client needs to know which) both already want one event per transaction,
+so the upload endpoint would have been built this way regardless. The
+guard just makes it impossible to build it the other way by accident.
+
+## Dashboard aggregates (Prompt 7): attribution and rate definitions
+
+Recorded per the prompt's explicit decisions, since the documents left room:
+
+- **Department attribution.** A person counts toward exactly one
+  department's rates: their `primary_department_id`. Secondary memberships
+  (`person_departments`) do not count toward rates, to avoid double
+  counting the same person in two departments' participation figures. A
+  person with no `primary_department_id` is attributed to a synthetic
+  `"(no department)"` bucket (via SQL `COALESCE`, not a real row) so totals
+  still reconcile.
+- **Faculty attribution.** Staff via `primary_department.faculty_id`;
+  students via `programme.faculty_id`. Nil (which is every faculty in the
+  current dev data — Document 01, section 9) groups as `"(no faculty)"`.
+  The query resolves this per-person with a `CASE WHEN type = 'staff'`
+  expression, so it stays correct once faculties are actually assigned.
+- **Rates.** `participation_rate = present / expected`, over expected
+  people only. `accounted_rate = (present + absent + excused) / expected`.
+  `present_unexpected` (present but not expected — a signed-in-only
+  student, a visitor) is reported alongside every breakdown but never
+  enters either rate's numerator or denominator. A group with `expected =
+  0` gets rate `nil`, not `0`: the dashboard shows "n/a", not "0%", so a
+  department nobody was expected in during a zones-scope drill does not
+  read as total non-compliance. Choosing present/expected as the headline
+  "participation" figure is a presentation decision, not a system
+  constraint: an excused person lowers a department's participation rate
+  even though they were accounted for. OSH or a Dean may prefer
+  `accounted_rate` as the headline; both are computed, so this is a
+  one-line change in the client, not in the API.
+- **Zone attribution double-counts on purpose.** `counts_by_zone/1`
+  attributes a `PersonStatus` to a zone via `Scope.person_area_pairs_query/0`
+  resolved to each area's zone. A person whose areas span two zones (a
+  department with areas in two different zones, or a person with a usual
+  area in one zone and a department area in another) is counted in **both**
+  zones' `expected`/`present`/etc. This mirrors `list_roll_call/2`'s own
+  scope resolution, which has the same property for the same reason: each
+  zone's warden needs to see everyone whose safety they might be
+  responsible for, even if that overlaps another warden's list. The
+  headline `activation_summary/1` figures are not affected — they count
+  every `PersonStatus` row once, never per zone.
 
 ## Scaffolding choices (for reference)
 

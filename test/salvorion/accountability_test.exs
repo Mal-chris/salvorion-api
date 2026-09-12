@@ -143,6 +143,45 @@ defmodule Salvorion.AccountabilityTest do
   # ---------------------------------------------------------------------------
 
   describe "ingest_event/2 gates" do
+    test "raises when called inside an enclosing transaction (after-commit guarantee)", %{
+      officer: officer
+    } do
+      person = person_fixture()
+      activation = start_campus(officer)
+
+      assert_raise ArgumentError,
+                   ~r/ingest_event\/2.*must not be called inside an enclosing transaction/s,
+                   fn ->
+                     Repo.transaction(fn ->
+                       Accountability.ingest_event(event_attrs(activation, person, []),
+                         actor: officer
+                       )
+                     end)
+                   end
+
+      # nothing was written: the guard fires before any query
+      assert Accountability.count_events(activation.id) == 0
+    end
+
+    test "resolve_contradiction/3 raises the same way when nested", %{officer: officer} do
+      person = person_fixture()
+      activation = start_campus(officer)
+      ingest!(activation, person, officer)
+      ingest!(activation, person, officer, kind: "roll_call", status: "absent")
+
+      assert_raise ArgumentError,
+                   ~r/resolve_contradiction\/3.*must not be called inside an enclosing transaction/s,
+                   fn ->
+                     Repo.transaction(fn ->
+                       Accountability.resolve_contradiction(activation.id, person.id,
+                         actor: officer
+                       )
+                     end)
+                   end
+
+      assert Accountability.count_open_contradictions(activation.id) == 1
+    end
+
     test "same client_uuid twice: one row, :duplicate, nothing written (I3)", %{officer: officer} do
       person = person_fixture()
       activation = start_campus(officer)

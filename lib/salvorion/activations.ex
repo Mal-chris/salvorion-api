@@ -67,6 +67,8 @@ defmodule Salvorion.Activations do
   # takes the same lock, which is what serialises them against each other.
   @start_lock_key 891_001
 
+  @pubsub Salvorion.PubSub
+
   # ---------------------------------------------------------------------------
   # Lifecycle
   # ---------------------------------------------------------------------------
@@ -135,6 +137,7 @@ defmodule Salvorion.Activations do
     end)
     |> audit(:activation, "activation.started", "activation", nil, &activation_snapshot/1, opts)
     |> run_audited(:activation)
+    |> broadcast_activation_changed()
   end
 
   def start_activation(%Activation{status: "scheduled"} = activation, opts) do
@@ -166,6 +169,7 @@ defmodule Salvorion.Activations do
       opts
     )
     |> run_audited(:activation)
+    |> broadcast_activation_changed()
   end
 
   def start_activation(%Activation{status: status}, _opts) do
@@ -195,6 +199,7 @@ defmodule Salvorion.Activations do
     |> Multi.update(:activation, Activation.close_changeset(activation, attrs))
     |> audit(:activation, "activation.closed", "activation", before, &activation_snapshot/1, opts)
     |> run_audited(:activation)
+    |> broadcast_activation_changed()
   end
 
   @doc """
@@ -212,6 +217,7 @@ defmodule Salvorion.Activations do
     |> Multi.update(:activation, Activation.mark_reported_changeset(activation))
     |> audit(:activation, "activation.reported", "activation", before, &activation_snapshot/1, [])
     |> run_audited(:activation)
+    |> broadcast_activation_changed()
   end
 
   # ---------------------------------------------------------------------------
@@ -256,6 +262,26 @@ defmodule Salvorion.Activations do
     |> limit(1)
     |> Repo.one()
   end
+
+  # ---------------------------------------------------------------------------
+  # Broadcast (FR-DASH-05 groundwork)
+  # ---------------------------------------------------------------------------
+
+  # Strictly after run_audited/2's transaction has committed — never from
+  # inside it — so a subscriber can never observe a message for a start,
+  # close or report that then rolls back. Subscribe via
+  # Salvorion.Accountability.subscribe/1 (same topic, one place it's public).
+  defp broadcast_activation_changed({:ok, %Activation{} = activation} = result) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "activation:#{activation.id}",
+      {:activation_changed, %{activation_id: activation.id, status: activation.status}}
+    )
+
+    result
+  end
+
+  defp broadcast_activation_changed(other), do: other
 
   # ---------------------------------------------------------------------------
   # Zone-overlap guard (FR-ACT-05)

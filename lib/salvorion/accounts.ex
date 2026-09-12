@@ -253,6 +253,31 @@ defmodule Salvorion.Accounts do
     |> run_audited(:assignment)
   end
 
+  @doc """
+  The `WardenAssignment` rows for `user` that are in effect `as_of` a given
+  moment: `starts_at <= as_of` and (`ends_at` is nil or `ends_at >= as_of`),
+  compared on dates.
+
+  Callers always pass the activation's `started_at` as `as_of` (never
+  `DateTime.utc_now/0`): a warden's scope during a drill is fixed at the
+  moment the drill starts and does not shift if an assignment is added,
+  changed, or expires mid-drill (docs/DECISIONS.md).
+  """
+  @spec effective_warden_assignments(%User{} | binary, DateTime.t()) :: [%WardenAssignment{}]
+  def effective_warden_assignments(user, %DateTime{} = as_of) do
+    as_of_date = DateTime.to_date(as_of)
+
+    Repo.all(
+      from wa in WardenAssignment,
+        where: wa.user_id == ^user_id(user),
+        where: wa.starts_at <= ^as_of_date,
+        where: is_nil(wa.ends_at) or wa.ends_at >= ^as_of_date
+    )
+  end
+
+  defp user_id(%User{id: id}), do: id
+  defp user_id(id) when is_binary(id), do: id
+
   defp scope_attrs({:zone, id}), do: %{zone_id: id}
   defp scope_attrs({:area, id}), do: %{area_id: id}
   # Anything else falls through to the changeset, which reports the missing scope.

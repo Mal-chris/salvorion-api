@@ -198,6 +198,54 @@ defmodule Salvorion.AccountsTest do
     end
   end
 
+  describe "effective_warden_assignments/2" do
+    test "includes open-ended and currently-bounded assignments, excludes expired and future ones" do
+      warden = user_fixture(%{role: "warden"})
+      zone = zone_fixture()
+      as_of = DateTime.new!(~D[2026-06-15], ~T[09:00:00], "Etc/UTC")
+
+      {:ok, open_ended} =
+        Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-01-01], nil})
+
+      {:ok, current} =
+        Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-06-01], ~D[2026-06-30]})
+
+      {:ok, _expired} =
+        Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-01-01], ~D[2026-01-31]})
+
+      {:ok, _future} =
+        Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-07-01], nil})
+
+      {:ok, boundary_start} =
+        Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-06-15], nil})
+
+      ids =
+        warden
+        |> Accounts.effective_warden_assignments(as_of)
+        |> Enum.map(& &1.id)
+        |> MapSet.new()
+
+      # starts_at == as_of's date is inclusive
+      assert ids == MapSet.new([open_ended.id, current.id, boundary_start.id])
+    end
+
+    test "returns nothing for a warden with no assignments" do
+      warden = user_fixture(%{role: "warden"})
+      assert Accounts.effective_warden_assignments(warden, DateTime.utc_now()) == []
+    end
+
+    test "accepts a raw user id as well as a %User{}" do
+      warden = user_fixture(%{role: "warden"})
+      zone = zone_fixture()
+      as_of = DateTime.new!(~D[2026-06-15], ~T[09:00:00], "Etc/UTC")
+      {:ok, a} = Accounts.assign_warden(warden.id, {:zone, zone.id}, {~D[2026-01-01], nil})
+
+      assert Accounts.effective_warden_assignments(warden.id, as_of) |> Enum.map(& &1.id) == [
+               a.id
+             ]
+    end
+  end
+
   describe "tokens" do
     test "issue_tokens/2 returns RS256 access (15 min) and refresh (30 days) tokens with role and kid" do
       user = user_fixture(%{role: "osh_officer"})
