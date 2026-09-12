@@ -35,3 +35,7 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Oban: jobs never run on their own in tests. Insert and assert with
+# Oban.Testing, run one explicitly with Oban.Testing.perform_job/2,3.
+config :salvorion, Oban, testing: :manual

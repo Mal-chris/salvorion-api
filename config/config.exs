@@ -54,6 +54,22 @@ config :salvorion, Salvorion.Accounts.Guardian,
     "refresh" => {30, :days}
   }
 
+# Oban (background jobs, Postgres-backed, no Redis; Document 04). `:reports`
+# is unused until the Reporting context (a later prompt), defined now so its
+# queue name is settled. The visitor-retention purge (Document 10, section 6;
+# NFR-PRIV-01) runs daily via Cron; Pruner clears Oban's own completed job
+# history so that table does not grow forever.
+config :salvorion, Oban,
+  repo: Salvorion.Repo,
+  queues: [maintenance: 2, reports: 2],
+  plugins: [
+    Oban.Plugins.Pruner,
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 2 * * *", Salvorion.Roster.Workers.PurgeVisitorsWorker}
+     ]}
+  ]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

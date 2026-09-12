@@ -15,6 +15,7 @@ defmodule Salvorion.Application do
       Salvorion.Repo,
       {DNSCluster, query: Application.get_env(:salvorion, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Salvorion.PubSub},
+      {Oban, Application.fetch_env!(:salvorion, Oban)},
       # Start a worker by calling: Salvorion.Worker.start_link(arg)
       # {Salvorion.Worker, arg},
       # Start to serve requests, typically the last entry

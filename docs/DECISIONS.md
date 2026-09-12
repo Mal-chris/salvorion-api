@@ -260,6 +260,41 @@ Recorded per the prompt's explicit decisions, since the documents left room:
   headline `activation_summary/1` figures are not affected — they count
   every `PersonStatus` row once, never per zone.
 
+## Visitors (Prompt 8): the pass code doubles as `id_number`
+
+A registered visitor's `Person.id_number` is set to a generated pass code,
+`"VIS-"` followed by 8 characters from Crockford's base32 alphabet
+(`0123456789ABCDEFGHJKMNPQRSTVWXYZ` — deliberately excludes I, L, O, U,
+which are visually confusable with 1, 1, 0 and V), drawn from
+`:crypto.strong_rand_bytes/1` (256 is exactly divisible by 32, so
+`rem(byte, 32)` introduces no modulo bias). This was a decision, not a
+requirement fixed by the documents: it means a visitor's temporary QR pass
+(FR-VIS-02) is resolved by exactly the same code path as a staff or student
+ID card scan (`Roster.get_person_by_id_number/1`, FR-SIGN-01) — there is no
+separate "visitor scan" branch anywhere in ingest, which is also why
+`Person.id_number`'s partial unique index (`WHERE id_number IS NOT NULL`)
+now covers visitors too, not just staff/students (docs/06).
+
+Collision handling: the pass code space is `32^8 ≈ 1.1 * 10^12` combinations,
+so a collision against the existing roster is astronomically unlikely, but
+`register_visitor/2` still retries generation (up to 5 attempts) on the
+unique-constraint violation rather than assuming it away, the same
+discipline `Activations`' zone-overlap guard and `Accountability`'s
+per-person lock apply to their own low-probability races.
+
+## Visitors (Prompt 8): an expired pass scanned during an activation is still accepted
+
+`ingest_event/2` never checks `visitor_expires_at` before resolving an
+`id_number` to a person — it only ever asks "does this pass code belong to
+someone" (FR-SIGN-01's ordinary lookup), never "is this pass still valid."
+A visitor whose pass has technically expired but who is physically present
+and scans in during a real activation is still recorded as present: the
+fact that matters during an emergency is where people are, not whether
+their paperwork is current, and FR-VIS-03 requires visitors be counted like
+anyone else. `list_visitors/1`'s `:active_on` filter and a possible future
+client-side warning on an expired pass are presentation concerns for
+reception/registration screens, not an accountability gate.
+
 ## Scaffolding choices (for reference)
 
 - Generated with `mix phx.new . --app salvorion --module Salvorion --no-html --no-assets --no-live --binary-id`

@@ -7,8 +7,9 @@ defmodule Salvorion.Roster do
 
   Staff and students arrive through a `Salvorion.Roster.Provider`
   implementation (see `Salvorion.Roster.Importer`) and are matched on
-  `id_number` via `upsert_person_by_id_number/2`. Visitors have no ID
-  number and are always created fresh at registration (a later prompt).
+  `id_number` via `upsert_person_by_id_number/2`. Visitors are always
+  created fresh at registration (`register_visitor/2`), with a generated
+  pass code standing in for `id_number` (FR-VIS-01/02; docs/DECISIONS.md).
 
   Every create/update takes an `opts` keyword list whose `:actor` names
   the authenticated user performing the action; the change and its audit
@@ -19,15 +20,22 @@ defmodule Salvorion.Roster do
   """
 
   import Ecto.Query, warn: false
-  import Salvorion.Audit.Multi, only: [audit: 7, run_audited: 2]
+  import Salvorion.Audit.Multi, only: [audit: 7, run_audited: 2, actor_id: 1]
 
   alias Ecto.Changeset
   alias Ecto.Multi
+  alias Salvorion.Accountability
+  alias Salvorion.Audit
   alias Salvorion.Organisation.Department
   alias Salvorion.Repo
   alias Salvorion.Roster.{Person, PersonDepartment, RosterImport}
+  alias Salvorion.Settings
 
   @type opts :: Salvorion.Audit.Multi.opts()
+
+  # Crockford base32: no I, L, O, U (visually confusable with 1, 1, 0, V).
+  @pass_code_alphabet ~c"0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+  @pass_code_attempts 5
 
   # ---------------------------------------------------------------------------
   # People
@@ -152,6 +160,213 @@ defmodule Salvorion.Roster do
       nil -> create_person(attrs, opts)
       %Person{} = person -> update_person(person, attrs, opts)
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Visitors (FR-VIS-01 to FR-VIS-04; docs/DECISIONS.md)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Registers a visitor (FR-VIS-01): a `Person` with `type: "visitor"`,
+  `source: "visitor_registration"`, and `id_number` set to a generated
+  pass code, `"VIS-"` followed by 8 Crockford-base32 characters
+  (`:crypto.strong_rand_bytes/1`; retried on the astronomically unlikely
+  unique-index collision — docs/DECISIONS.md). This pass code is what
+  the client renders as the visitor's temporary QR pass (FR-VIS-02): a
+  scan of it resolves through `get_person_by_id_number/1` exactly like
+  a staff or student card, no special visitor path.
+
+  `attrs` needs `:first_name`, `:last_name`, `:visitor_host`; optional
+  `:phone`, `:email`, `:visitor_expires_at` (a `Date`, defaults to
+  today). `opts` takes the usual `:actor` plus, when registration
+  happens at an assembly point during an activation (docs/09, section
+  2): `:activation_id`, `:assembly_point_id`, `:area_id`, `:device_id`,
+  `:recorded_by_id` (defaults to `:actor`), and optionally `:client_uuid`
+  / `:client_timestamp` for an offline client replaying a queued
+  registration.
+
+  Returns `{:ok, person, event}` when `:activation_id` is given and the
+  event was ingested, `{:ok, person, nil}` when it was not given, or
+  `{:ok, person, {:error, reason}}` when it was given but ingestion
+  failed (e.g. the activation has since closed) — the person is created
+  either way; a failed sign-in event is not a reason to undo the
+  registration, since the person is still standing there and the warden
+  still needs a record of them and a pass to hand over. Returns
+  `{:error, changeset}` only when the person itself could not be
+  created.
+  """
+  @spec register_visitor(map, opts) ::
+          {:ok, %Person{}, %Accountability.AccountabilityEvent{} | nil | {:error, term}}
+          | {:error, Ecto.Changeset.t()}
+  def register_visitor(attrs, opts \\ []) do
+    attrs =
+      attrs
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("type", "visitor")
+      |> Map.put("source", "visitor_registration")
+      |> Map.put_new("visitor_expires_at", Date.utc_today())
+
+    case create_visitor_with_pass_code(attrs, opts, @pass_code_attempts) do
+      {:ok, person} -> {:ok, person, maybe_ingest_visitor_sign_in(person, opts)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp create_visitor_with_pass_code(_attrs, _opts, 0) do
+    {:error, :pass_code_generation_failed}
+  end
+
+  defp create_visitor_with_pass_code(attrs, opts, attempts_left) do
+    changeset =
+      %Person{}
+      |> person_changeset(Map.put(attrs, "id_number", generate_pass_code()))
+      |> visitor_host_required()
+
+    Multi.new()
+    |> Multi.insert(:person, changeset)
+    |> audit(:person, "visitor.registered", "person", nil, &visitor_snapshot/1, opts)
+    |> run_audited(:person)
+    |> case do
+      {:ok, person} ->
+        {:ok, person}
+
+      {:error, %Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :id_number) do
+          create_visitor_with_pass_code(attrs, opts, attempts_left - 1)
+        else
+          {:error, changeset}
+        end
+    end
+  end
+
+  defp visitor_host_required(changeset),
+    do: Changeset.validate_required(changeset, [:visitor_host])
+
+  defp generate_pass_code do
+    code =
+      8
+      |> :crypto.strong_rand_bytes()
+      |> :binary.bin_to_list()
+      |> Enum.map(&Enum.at(@pass_code_alphabet, rem(&1, 32)))
+      |> List.to_string()
+
+    "VIS-" <> code
+  end
+
+  # Runs only after register_visitor/2's own transaction (above) has
+  # committed: ingest_event/2 manages its own transaction and must not be
+  # called inside an enclosing one (Prompt 7 follow-up). A missing
+  # :activation_id means this registration was not at an assembly point
+  # during an activation (e.g. advance registration at reception).
+  defp maybe_ingest_visitor_sign_in(%Person{} = person, opts) do
+    case Keyword.get(opts, :activation_id) do
+      nil ->
+        nil
+
+      activation_id ->
+        recorded_by_id = Keyword.get(opts, :recorded_by_id) || actor_id(opts)
+
+        attrs = %{
+          client_uuid: Keyword.get_lazy(opts, :client_uuid, &Ecto.UUID.generate/0),
+          activation_id: activation_id,
+          person_id: person.id,
+          kind: "visitor_registered",
+          status: "present",
+          recorded_by_id: recorded_by_id,
+          device_id: Keyword.get(opts, :device_id),
+          assembly_point_id: Keyword.get(opts, :assembly_point_id),
+          area_id: Keyword.get(opts, :area_id),
+          client_timestamp: Keyword.get_lazy(opts, :client_timestamp, &DateTime.utc_now/0)
+        }
+
+        case Accountability.ingest_event(attrs, actor: recorded_by_id) do
+          {:ok, event, _person_status_or_duplicate} -> event
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  What the client shows on the visitor's pass screen (Document 11,
+  section 1.4): the pass code (rendered as a QR), name, host and
+  expiry.
+  """
+  @spec visitor_pass(%Person{}) :: map
+  def visitor_pass(%Person{type: "visitor"} = person) do
+    %{
+      pass_code: person.id_number,
+      first_name: person.first_name,
+      last_name: person.last_name,
+      visitor_host: person.visitor_host,
+      visitor_expires_at: person.visitor_expires_at
+    }
+  end
+
+  @doc """
+  Visitors active on `opts[:active_on]` (default today) —
+  `visitor_expires_at >= that date` — newest first.
+  """
+  @spec list_visitors(keyword | map) :: [%Person{}]
+  def list_visitors(opts \\ []) do
+    opts = Map.new(opts)
+    active_on = Map.get(opts, :active_on, Date.utc_today())
+
+    Repo.all(
+      from p in Person,
+        where: p.type == "visitor" and p.visitor_expires_at >= ^active_on,
+        order_by: [desc: p.inserted_at]
+    )
+  end
+
+  @doc """
+  Anonymises visitors whose retention period has elapsed (FR-VIS-04;
+  NFR-PRIV-01): `visitor_expires_at + Setting("visitor_retention_days",
+  90) < today`. Sets `first_name`/`last_name` to a fixed placeholder and
+  clears `email`, `phone`, `visitor_host` in one `UPDATE ... WHERE` (not
+  one changeset write per row); already-purged rows are excluded so
+  re-running is a no-op. `id_number` (the pass code) and the row itself
+  are kept: it carries no personal information and preserves the link
+  from `AccountabilityEvent`/`PersonStatus` history to a resolvable
+  person (accountability history is retained indefinitely, only
+  personal details are purged). One audit row for the whole run —
+  never one per visitor, which would re-record who they were — actor
+  `nil` by default: this is a system action (an Oban job, Task 4), not
+  something a user did.
+  """
+  @spec purge_expired_visitors(opts) :: {:ok, non_neg_integer}
+  def purge_expired_visitors(opts \\ []) do
+    retention_days = Settings.get_setting("visitor_retention_days", 90)
+    cutoff = Date.add(Date.utc_today(), -retention_days)
+
+    Repo.transaction(fn ->
+      {count, _} =
+        Repo.update_all(
+          from(p in Person,
+            where: p.type == "visitor",
+            where: not is_nil(p.visitor_expires_at) and p.visitor_expires_at < ^cutoff,
+            where: not (p.first_name == "Visitor" and p.last_name == "(purged)")
+          ),
+          set: [
+            first_name: "Visitor",
+            last_name: "(purged)",
+            email: nil,
+            phone: nil,
+            visitor_host: nil,
+            updated_at: DateTime.utc_now()
+          ]
+        )
+
+      {:ok, _} =
+        Audit.record(%{
+          actor_user_id: actor_id(opts),
+          action: "visitor.purged",
+          entity_type: "visitor_purge",
+          entity_id: nil,
+          after: %{count: count, retention_days: retention_days, cutoff: cutoff}
+        })
+
+      count
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -381,6 +596,18 @@ defmodule Salvorion.Roster do
       usual_area_id: p.usual_area_id,
       source: p.source,
       visitor_host: p.visitor_host,
+      visitor_expires_at: p.visitor_expires_at
+    }
+
+  defp visitor_snapshot(%Person{} = p),
+    do: %{
+      id: p.id,
+      pass_code: p.id_number,
+      first_name: p.first_name,
+      last_name: p.last_name,
+      visitor_host: p.visitor_host,
+      phone: p.phone,
+      email: p.email,
       visitor_expires_at: p.visitor_expires_at
     }
 

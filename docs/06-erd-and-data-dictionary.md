@@ -74,7 +74,7 @@ erDiagram
     PERSON {
         uuid id PK
         string type "staff | student | visitor"
-        string id_number "nullable for visitors"
+        string id_number "pass code for visitors (VIS-xxxxxxxx)"
         string first_name
         string last_name
         string email "nullable"
@@ -232,7 +232,11 @@ erDiagram
 - `accountability_events.client_uuid` — unique index. This is what makes sync retries idempotent (FR-SIGN-06).
 - `person_statuses` — unique index on `(activation_id, person_id)`.
 - `expected_presences` — unique index on `(activation_id, person_id)`.
-- `people.id_number` — unique index where not null (visitors have no ID number).
+- `people.id_number` — unique index where not null. Every visitor has one too
+  (their generated `VIS-xxxxxxxx` pass code, Prompt 8), so the partial index
+  exists for people with no `id_number` at all rather than for visitors
+  specifically — none, currently, but the schema does not assume it stays
+  that way.
 - `warden_assignments` — a check constraint ensuring exactly one of `zone_id` or `area_id` is set, not both, not neither.
 - `activations` — FR-ACT-05 (no two active activations in the same zone) is enforced in the Activations context inside a transaction. It cannot be a database constraint: zones live in the `activation_zones` join table and a campus-wide activation has no rows there, so no single partial unique index can express the rule.
 - `person_statuses` — a partial index on `(activation_id, contradicting_event_id)` where the contradiction is unresolved, so the roll-call screen's "Flagged" group is a cheap query.
