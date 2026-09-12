@@ -44,6 +44,10 @@ defmodule Salvorion.Organisation do
   @spec get_faculty!(binary) :: %Faculty{}
   def get_faculty!(id), do: Repo.get!(Faculty, id)
 
+  @doc "Finds a faculty by exact code, or nil."
+  @spec get_faculty_by_code(String.t()) :: %Faculty{} | nil
+  def get_faculty_by_code(code) when is_binary(code), do: Repo.get_by(Faculty, code: code)
+
   @spec update_faculty(%Faculty{}, map, opts) ::
           {:ok, %Faculty{}} | {:error, Ecto.Changeset.t()}
   def update_faculty(%Faculty{} = faculty, attrs, opts \\ []) do
@@ -80,6 +84,10 @@ defmodule Salvorion.Organisation do
   @doc "Finds a department by exact name, or nil. Used by the seed for idempotency."
   @spec get_department_by_name(String.t()) :: %Department{} | nil
   def get_department_by_name(name) when is_binary(name), do: Repo.get_by(Department, name: name)
+
+  @doc "Finds a department by exact code, or nil. Roster imports resolve `department_code` this way."
+  @spec get_department_by_code(String.t()) :: %Department{} | nil
+  def get_department_by_code(code) when is_binary(code), do: Repo.get_by(Department, code: code)
 
   @spec update_department(%Department{}, map, opts) ::
           {:ok, %Department{}} | {:error, Ecto.Changeset.t()}
@@ -131,6 +139,10 @@ defmodule Salvorion.Organisation do
 
   @spec get_programme!(binary) :: %Programme{}
   def get_programme!(id), do: Repo.get!(Programme, id)
+
+  @doc "Finds a programme by exact code, or nil. Roster imports resolve `programme_code` this way."
+  @spec get_programme_by_code(String.t()) :: %Programme{} | nil
+  def get_programme_by_code(code) when is_binary(code), do: Repo.get_by(Programme, code: code)
 
   # ---------------------------------------------------------------------------
   # Audit snapshots (what lands in audit_logs.before/after)

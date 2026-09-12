@@ -62,7 +62,9 @@ defmodule Salvorion.MixProject do
       # CORS for the Flutter web client during development
       {:cors_plug, "~> 3.0"},
       # OpenAPI spec generation from routes/schemas
-      {:open_api_spex, "~> 3.22"}
+      {:open_api_spex, "~> 3.22"},
+      # CSV parsing for the roster FileImport provider
+      {:nimble_csv, "~> 1.3"}
     ]
   end
 

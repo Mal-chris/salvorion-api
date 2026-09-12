@@ -1,0 +1,9 @@
+type,id_number,first_name,last_name,email,phone,department_code,programme_code
+staff,FIX-0001,Marlow,Quillbrook,marlow.quillbrook@example.invalid,876-555-0101,NURSING,
+staff,FIX-0002,Tamsin,Farrowden,,,BIOLOGY,
+student,FIX-0003,Orrin,Ashgrove,orrin.ashgrove@example.invalid,,,
+staff,,Kestrel,Thornbury,,,NURSING,
+staff,FIX-0005,Elowen,Wexcombe,,,NOT_A_DEPARTMENT,
+visitor,,Sorrel,Brambleigh,,,,
+student,FIX-0007,Verity,Corvane,,,,NOT_A_PROGRAMME
+student,FIX-0008,,Dunmoor,,,,
