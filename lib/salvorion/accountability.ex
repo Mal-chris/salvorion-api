@@ -80,14 +80,15 @@ defmodule Salvorion.Accountability do
   @roll_call_kinds ~w(roll_call)
   @override_kinds ~w(override)
   @resolution_kinds ~w(contradiction_resolved)
+  @review_kinds @override_kinds ++ @resolution_kinds
 
   @student_rule_key "student_accountability_rule"
   @default_student_rule "signed_in_only"
   @override_roles ~w(osh_officer admin)
 
-  # Offline clients may upload after the activation closes; anything the
-  # client stamped within this window of closed_at is still accepted
-  # (docs/DECISIONS.md). A setting later, if OSH wants it tunable.
+  # Offline clients may upload field events after the activation closes;
+  # anything the client stamped within this window of closed_at is still
+  # accepted (docs/DECISIONS.md). A setting later, if OSH wants it tunable.
   @late_event_tolerance_seconds 5 * 60
 
   # Namespace for the per-person advisory lock (two-int form, so it
@@ -270,7 +271,11 @@ defmodule Salvorion.Accountability do
          {:ok, changeset} <- valid_or_error(changeset),
          {:ok, activation} <- fetch_activation(Changeset.get_field(changeset, :activation_id)),
          :ok <-
-           check_activation_accepts(activation, Changeset.get_field(changeset, :client_timestamp)),
+           check_activation_accepts(
+             activation,
+             Changeset.get_field(changeset, :kind),
+             Changeset.get_field(changeset, :client_timestamp)
+           ),
          :ok <- check_override_permitted(changeset) do
       insert_and_derive(changeset, activation, person.id, opts)
     else
@@ -316,12 +321,17 @@ defmodule Salvorion.Accountability do
     end
   end
 
-  defp check_activation_accepts(%Activation{status: "scheduled"}, _),
+  defp check_activation_accepts(%Activation{status: "scheduled"}, _kind, _),
     do: {:error, :activation_not_started}
 
-  defp check_activation_accepts(%Activation{status: "active"}, _), do: :ok
+  defp check_activation_accepts(%Activation{status: "active"}, _kind, _), do: :ok
 
-  defp check_activation_accepts(%Activation{closed_at: closed_at}, client_timestamp) do
+  # Review actions (override, contradiction_resolved) are how OSH works the
+  # unaccounted list after the roll call (docs/09 section 4, FR-ROLL-07),
+  # so they are accepted at any time after close. Field events are not.
+  defp check_activation_accepts(%Activation{}, kind, _) when kind in @review_kinds, do: :ok
+
+  defp check_activation_accepts(%Activation{closed_at: closed_at}, _kind, client_timestamp) do
     deadline = DateTime.add(closed_at, @late_event_tolerance_seconds, :second)
 
     if DateTime.compare(client_timestamp, deadline) in [:lt, :eq],

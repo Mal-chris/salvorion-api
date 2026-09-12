@@ -233,6 +233,65 @@ defmodule Salvorion.AccountabilityTest do
       assert log.after["event_id"] == event.id
     end
 
+    test "review actions have no post-close window; field events keep it", %{officer: officer} do
+      person = person_fixture()
+      activation = start_campus(officer)
+      ingest!(activation, person, officer)
+      {:ok, closed} = Activations.close_activation(activation, actor: officer)
+      thirty_min_late = DateTime.add(closed.closed_at, 30 * 60)
+
+      assert {:error, :activation_closed} =
+               Accountability.ingest_event(
+                 event_attrs(closed, person,
+                   kind: "roll_call",
+                   status: "absent",
+                   client_timestamp: thirty_min_late
+                 ),
+                 actor: officer
+               )
+
+      assert {:ok, _, %PersonStatus{status: "excused"}} =
+               Accountability.ingest_event(
+                 event_attrs(closed, person,
+                   kind: "override",
+                   status: "excused",
+                   note: "confirmed safe by phone",
+                   client_timestamp: thirty_min_late
+                 ),
+                 actor: officer
+               )
+
+      # still audited for a regenerate once the activation is reported
+      {:ok, reported} = Activations.mark_activation_reported(closed)
+
+      assert {:ok, event, _} =
+               Accountability.ingest_event(
+                 event_attrs(reported, person,
+                   kind: "override",
+                   status: "present",
+                   note: "seen at the gate",
+                   client_timestamp: DateTime.add(closed.closed_at, 60 * 60)
+                 ),
+                 actor: officer
+               )
+
+      assert [log] = Audit.list_audit_logs(action: "accountability.late_event_after_report")
+      assert log.after["event_id"] == event.id
+
+      # and a review action is still refused on a scheduled activation
+      {:ok, scheduled} =
+        Activations.schedule_activation(
+          %{activation_type: "drill", started_at: DateTime.utc_now()},
+          actor: officer
+        )
+
+      assert {:error, :activation_not_started} =
+               Accountability.ingest_event(
+                 event_attrs(scheduled, person, kind: "override", status: "excused", note: "x"),
+                 actor: officer
+               )
+    end
+
     test "override needs a note and an osh_officer/admin recorder", %{officer: officer} do
       person = person_fixture()
       activation = start_campus(officer)

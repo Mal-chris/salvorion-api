@@ -71,18 +71,32 @@ can confirm or change them; none of these were fixed by the documents.
 
 ## Accountability core (Prompt 6): late events after an activation closes
 
-Offline devices upload after connectivity returns, which may be after the
-OSH Officer has closed the activation. `Accountability.ingest_event/2`
-accepts an event for a `closed` or `reported` activation if its
-`client_timestamp` is no later than `closed_at` **plus 5 minutes**
-(`@late_event_tolerance_seconds`, a constant; to become a setting if OSH
-wants it tunable). Later than that it is rejected with
-`{:error, :activation_closed}`. An accepted late event is stored and the
-person's status re-derived exactly as if it had arrived on time. If the
-activation is already `reported`, an additional audit row with action
-`"accountability.late_event_after_report"` is written so the Reporting
-context can offer a regenerate (FR-REP-05). This is the one place
-`client_timestamp` is consulted; it is never used for ordering (I2).
+`Accountability.ingest_event/2` treats two classes of event differently once
+an activation is `closed` or `reported`. Both are still rejected on a
+`scheduled` activation (`{:error, :activation_not_started}`).
+
+- **Field events** — kinds `scanned`, `manual`, `visitor_registered` and
+  `roll_call`. These come from devices at the assembly point, and offline
+  devices upload after connectivity returns, which may be after the OSH
+  Officer has closed the activation. A field event is accepted if its
+  `client_timestamp` is no later than `closed_at` **plus 5 minutes**
+  (`@late_event_tolerance_seconds`, a constant; to become a setting if OSH
+  wants it tunable); later than that it is rejected with
+  `{:error, :activation_closed}`. This is the one place `client_timestamp`
+  is consulted; it is never used for ordering (I2).
+- **Review actions** — kinds `override` and `contradiction_resolved`. These
+  are not field observations but how OSH works the unaccounted list after
+  the roll call: the officer reviews who is still unaccounted, confirms
+  people safe by phone or otherwise, and overrides their status to excused
+  with a mandatory note (docs/09, section 4; FR-ROLL-07). That work happens
+  *after* close by design, so review actions are accepted at any time once
+  the activation is `active`, `closed` or `reported`, with no time window.
+
+An accepted late event of either class is stored and the person's status
+re-derived exactly as if it had arrived on time. If the activation is
+already `reported`, an additional audit row with action
+`"accountability.late_event_after_report"` is written for either class, so
+the Reporting context can offer a regenerate (FR-REP-05).
 
 ## Accountability core (Prompt 6): contradiction resolution is an event, so I4 holds fully
 
