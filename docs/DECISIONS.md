@@ -21,6 +21,20 @@ client-generated `client_uuid` on each write for idempotency. The write
 endpoints must therefore treat `client_uuid` as an idempotency key and return
 success for replays of an already-applied write.
 
+## Starting/closing an activation is OSH Officer only, not System Administrator
+
+Per Document 10 (Security Design), section 1: the RBAC matrix lists "Start
+an activation" and "Close an activation" as **OSH Officer only** — the
+System Administrator column is blank for both rows. This is a different
+shape from the Locations, Organisation and Settings permissions built in
+Prompt 3, where OSH Officer and System Administrator are both permitted
+("Manage assembly points, zones, areas", "Change system settings", etc.
+are Yes/Yes). Whoever wires the RBAC route mapping for the Activations
+routes (a later prompt) must not default to "same access as everything
+else OSH Officer can do" — System Administrator does not get a pass on
+starting or closing an activation, even though it does on almost every
+other OSH-managed resource.
+
 ## Scaffolding choices (for reference)
 
 - Generated with `mix phx.new . --app salvorion --module Salvorion --no-html --no-assets --no-live --binary-id`
