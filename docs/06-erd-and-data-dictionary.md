@@ -140,7 +140,7 @@ erDiagram
         uuid client_uuid "unique, for idempotency"
         uuid activation_id FK
         uuid person_id FK
-        string kind "scanned | manual | roll_call | visitor_registered"
+        string kind "scanned | manual | roll_call | visitor_registered | override | contradiction_resolved"
         string status "present | absent | excused"
         uuid recorded_by_id FK
         uuid device_id FK "nullable"

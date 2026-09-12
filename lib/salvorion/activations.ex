@@ -55,6 +55,7 @@ defmodule Salvorion.Activations do
 
   alias Ecto.Changeset
   alias Ecto.Multi
+  alias Salvorion.Accountability
   alias Salvorion.Activations.{Activation, ActivationZone}
   alias Salvorion.Locations.Zone
   alias Salvorion.Repo
@@ -129,6 +130,9 @@ defmodule Salvorion.Activations do
     |> Multi.run(:zones, fn repo, %{activation: activation, zone_ids: {_cs, ids}} ->
       insert_activation_zones(repo, activation, ids)
     end)
+    |> Multi.run(:expectations, fn _repo, %{activation: activation} ->
+      Accountability.initialise_for_activation(activation)
+    end)
     |> audit(:activation, "activation.started", "activation", nil, &activation_snapshot/1, opts)
     |> run_audited(:activation)
   end
@@ -149,6 +153,9 @@ defmodule Salvorion.Activations do
         "started_by_id" => activation.started_by_id,
         "started_at" => DateTime.utc_now()
       })
+    end)
+    |> Multi.run(:expectations, fn _repo, %{activation: activation} ->
+      Accountability.initialise_for_activation(activation)
     end)
     |> audit(
       :activation,

@@ -106,10 +106,22 @@ defmodule Salvorion.ActivationsTest do
       assert activation.scope == "campus"
       assert activation.started_by_id == officer.id
 
-      assert [log] = Audit.list_audit_logs(entity_type: "activation", entity_id: activation.id)
-      assert log.action == "activation.started"
+      assert [log] =
+               Audit.list_audit_logs(
+                 entity_type: "activation",
+                 entity_id: activation.id,
+                 action: "activation.started"
+               )
+
       assert log.actor_user_id == officer.id
       assert log.after["status"] == "active"
+
+      # starting also materialises expected presence in the same transaction
+      assert [_] =
+               Audit.list_audit_logs(
+                 entity_id: activation.id,
+                 action: "accountability.expectations_initialised"
+               )
     end
 
     test "zones scope inserts activation_zones and is found by get_active_activation_for_zone/1" do
@@ -167,10 +179,10 @@ defmodule Salvorion.ActivationsTest do
       assert started.status == "active"
       assert Activations.get_active_activation_for_zone(zone.id).id == started.id
 
-      assert [start_log, _schedule_log] =
-               Audit.list_audit_logs(entity_type: "activation", entity_id: started.id)
+      assert [start_log] =
+               Audit.list_audit_logs(entity_id: started.id, action: "activation.started")
 
-      assert start_log.action == "activation.started"
+      assert [_] = Audit.list_audit_logs(entity_id: started.id, action: "activation.scheduled")
       assert start_log.before["status"] == "scheduled"
       assert start_log.after["status"] == "active"
     end
@@ -264,10 +276,9 @@ defmodule Salvorion.ActivationsTest do
       assert closed.status == "closed"
       assert closed.closed_by_id == officer.id
 
-      assert [close_log, _start_log] =
-               Audit.list_audit_logs(entity_type: "activation", entity_id: activation.id)
+      assert [close_log] =
+               Audit.list_audit_logs(entity_id: activation.id, action: "activation.closed")
 
-      assert close_log.action == "activation.closed"
       assert close_log.actor_user_id == officer.id
     end
 
@@ -313,10 +324,9 @@ defmodule Salvorion.ActivationsTest do
       assert {:ok, reported} = Activations.mark_activation_reported(closed)
       assert reported.status == "reported"
 
-      assert [report_log, _close_log, _start_log] =
-               Audit.list_audit_logs(entity_type: "activation", entity_id: reported.id)
+      assert [report_log] =
+               Audit.list_audit_logs(entity_id: reported.id, action: "activation.reported")
 
-      assert report_log.action == "activation.reported"
       assert report_log.actor_user_id == nil
     end
 

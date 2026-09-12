@@ -1,7 +1,11 @@
 defmodule Salvorion.Accountability.AccountabilityEvent do
   @moduledoc """
   An immutable, append-only record of a single sign-in, roll-call
-  mark, or visitor registration. `client_uuid` is generated on the
+  mark, visitor registration, status override (FR-ROLL-07; an override
+  always carries a note), or a warden's confirmation of a flagged
+  contradiction (`contradiction_resolved`, always `status: "present"`;
+  it never changes a status, only records that the flag was seen).
+  `client_uuid` is generated on the
   device at the moment of the action and is the idempotency key for
   sync retries (FR-SIGN-06): re-submitting the same client_uuid
   after a dropped connection must not create a duplicate row.
@@ -17,7 +21,7 @@ defmodule Salvorion.Accountability.AccountabilityEvent do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(scanned manual roll_call visitor_registered)
+  @kinds ~w(scanned manual roll_call visitor_registered override contradiction_resolved)
   @statuses ~w(present absent excused)
 
   schema "accountability_events" do
@@ -70,11 +74,22 @@ defmodule Salvorion.Accountability.AccountabilityEvent do
     ])
     |> validate_inclusion(:kind, unquote(@kinds))
     |> validate_inclusion(:status, unquote(@statuses))
+    |> validate_override_note()
     |> put_change(:server_timestamp, DateTime.utc_now())
     |> unique_constraint(:client_uuid)
     |> foreign_key_constraint(:activation_id)
     |> foreign_key_constraint(:person_id)
     |> foreign_key_constraint(:recorded_by_id)
+  end
+
+  # FR-ROLL-07: an override is only meaningful with the reason recorded.
+  # A contradiction_resolved event carries no status of its own.
+  defp validate_override_note(changeset) do
+    case get_field(changeset, :kind) do
+      "override" -> validate_required(changeset, [:note])
+      "contradiction_resolved" -> validate_inclusion(changeset, :status, ["present"])
+      _ -> changeset
+    end
   end
 
   @doc "Whether this event kind counts as authoritative over a roll_call mark (FR-ROLL-05)."
