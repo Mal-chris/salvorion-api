@@ -6,7 +6,7 @@ defmodule Salvorion.Accounts do
   Every function that creates, updates or deactivates something takes an
   `opts` keyword list whose `:actor` (a `%User{}` or a user id) names the
   authenticated user performing the action; the change and its audit row are
-  written in one transaction via `Salvorion.Audit.record/1`. Pass no actor
+  written in one transaction via `Salvorion.Audit.Multi`. Pass no actor
   only where there is genuinely no acting user (the bootstrap seed).
 
   Users are never deleted: `deactivate_user/2` sets `active: false`
@@ -16,9 +16,10 @@ defmodule Salvorion.Accounts do
 
   import Ecto.Query, warn: false
 
+  import Salvorion.Audit.Multi, only: [audit: 7, run_audited: 2]
+
   alias Ecto.Multi
   alias Salvorion.Accounts.{Device, Guardian, User, WardenAssignment}
-  alias Salvorion.Audit
   alias Salvorion.Repo
 
   @type opts :: [actor: %User{} | binary | nil]
@@ -41,8 +42,8 @@ defmodule Salvorion.Accounts do
 
     Multi.new()
     |> Multi.insert(:user, changeset)
-    |> audit(:user, "user.registered", "user", & &1.user.id, nil, &user_snapshot(&1.user), opts)
-    |> run_multi(:user)
+    |> audit(:user, "user.registered", "user", nil, &user_snapshot/1, opts)
+    |> run_audited(:user)
   end
 
   @doc """
@@ -103,12 +104,11 @@ defmodule Salvorion.Accounts do
       :user,
       "user.role_changed",
       "user",
-      & &1.user.id,
       before,
-      &user_snapshot(&1.user),
+      &user_snapshot/1,
       opts
     )
-    |> run_multi(:user)
+    |> run_audited(:user)
   end
 
   @doc """
@@ -125,12 +125,11 @@ defmodule Salvorion.Accounts do
       :user,
       "user.deactivated",
       "user",
-      & &1.user.id,
       before,
-      &user_snapshot(&1.user),
+      &user_snapshot/1,
       opts
     )
-    |> run_multi(:user)
+    |> run_audited(:user)
   end
 
   # ---------------------------------------------------------------------------
@@ -151,12 +150,11 @@ defmodule Salvorion.Accounts do
       :device,
       "device.registered",
       "device",
-      & &1.device.id,
       nil,
-      &device_snapshot(&1.device),
+      &device_snapshot/1,
       opts
     )
-    |> run_multi(:device)
+    |> run_audited(:device)
   end
 
   @spec get_device(binary) :: %Device{} | nil
@@ -188,12 +186,11 @@ defmodule Salvorion.Accounts do
       :device,
       "device.revoked",
       "device",
-      & &1.device.id,
       before,
-      &device_snapshot(&1.device),
+      &device_snapshot/1,
       opts
     )
-    |> run_multi(:device)
+    |> run_audited(:device)
   end
 
   @doc "True when the device does not exist or has `revoked_at` set."
@@ -249,12 +246,11 @@ defmodule Salvorion.Accounts do
       :assignment,
       "warden_assignment.created",
       "warden_assignment",
-      & &1.assignment.id,
       nil,
-      &assignment_snapshot(&1.assignment),
+      &assignment_snapshot/1,
       opts
     )
-    |> run_multi(:assignment)
+    |> run_audited(:assignment)
   end
 
   defp scope_attrs({:zone, id}), do: %{zone_id: id}
@@ -329,38 +325,8 @@ defmodule Salvorion.Accounts do
   defp device_revoked_claim?(_), do: false
 
   # ---------------------------------------------------------------------------
-  # Audit helpers
+  # Audit snapshots
   # ---------------------------------------------------------------------------
-
-  # Appends an audit step to a Multi. `entity_id_fun` and `after_fun` receive
-  # the Multi's results so far so they can read the freshly written row.
-  defp audit(multi, _step, action, entity_type, entity_id_fun, before, after_fun, opts) do
-    Multi.run(multi, :audit, fn _repo, results ->
-      Audit.record(%{
-        actor_user_id: actor_id(opts),
-        action: action,
-        entity_type: entity_type,
-        entity_id: entity_id_fun.(results),
-        before: before,
-        after: after_fun.(results)
-      })
-    end)
-  end
-
-  defp run_multi(multi, key) do
-    case Repo.transaction(multi) do
-      {:ok, results} -> {:ok, Map.fetch!(results, key)}
-      {:error, _step, changeset, _} -> {:error, changeset}
-    end
-  end
-
-  defp actor_id(opts) do
-    case Keyword.get(opts, :actor) do
-      %User{id: id} -> id
-      id when is_binary(id) -> id
-      nil -> nil
-    end
-  end
 
   # Snapshots are what lands in audit_logs.before/after. They never include
   # the password hash.

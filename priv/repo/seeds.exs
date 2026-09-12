@@ -2,8 +2,10 @@
 #
 #     mix run priv/repo/seeds.exs
 #
-# Seeds one System Administrator so there is a way to log in. Idempotent:
-# re-running does nothing if the admin already exists.
+# Seeds one System Administrator so there is a way to log in, then the
+# assembly point / zone / area hierarchy from the OSH Emergency Assembly Point
+# Guide (priv/repo/seeds/locations_seed.exs). Both parts are idempotent:
+# re-running creates nothing that already exists.
 #
 # The password is a fixed development value, printed below when the seed
 # creates the user. Change it (or replace the user) before any non-local use.
@@ -35,3 +37,8 @@ case Repo.get_by(User, email: admin_email) do
         raise "[seeds] could not create admin: #{inspect(changeset.errors)}"
     end
 end
+
+# The OSH Emergency Assembly Point Guide: assembly points, zones, areas and
+# the departments named in it. Real data; see the file for the rules applied.
+Code.require_file("seeds/locations_seed.exs", __DIR__)
+Salvorion.Seeds.Locations.run()
