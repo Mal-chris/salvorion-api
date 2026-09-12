@@ -1,0 +1,46 @@
+defmodule Salvorion.Accounts.Guardian do
+  @moduledoc """
+  Guardian implementation for Salvorion.
+
+  Tokens are RS256 JWTs signed with the private key from
+  `Salvorion.Accounts.Keys` (see `config/config.exs`). Every token carries:
+
+    * `sub`  - the user's id
+    * `role` - the user's role, so `SalvorionWeb.Plugs.Authorize` can check
+      permissions without a database round-trip per request
+    * `typ`  - `"access"` (15 min) or `"refresh"` (30 days)
+    * `device_id` - optional; set when the login was tied to a registered
+      device so revocation (`devices.revoked_at`) can be enforced
+    * `aud` - includes `"powersync"` so the same access token authenticates
+      the client to the PowerSync service (`client_auth.audience`)
+  """
+
+  use Guardian, otp_app: :salvorion
+
+  alias Salvorion.Accounts
+  alias Salvorion.Accounts.User
+
+  @impl true
+  def subject_for_token(%User{id: id}, _claims), do: {:ok, id}
+  def subject_for_token(_, _), do: {:error, :unhandled_resource_type}
+
+  @impl true
+  def resource_from_claims(%{"sub" => id}) do
+    case Accounts.get_user(id) do
+      nil -> {:error, :resource_not_found}
+      user -> {:ok, user}
+    end
+  end
+
+  def resource_from_claims(_), do: {:error, :resource_not_found}
+
+  @impl true
+  def build_claims(claims, %User{role: role}, _opts) do
+    claims =
+      claims
+      |> Map.put("role", role)
+      |> Map.put("aud", [config(:issuer), "powersync"])
+
+    {:ok, claims}
+  end
+end

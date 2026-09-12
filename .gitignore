@@ -51,3 +51,6 @@ $RECYCLE.BIN/
 
 # Claude Code per-user permissions
 .claude/settings.local.json
+
+# Guardian RS256 signing keys (dev keys are generated locally; never commit them)
+/priv/keys/

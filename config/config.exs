@@ -39,6 +39,21 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Guardian (JWT). Tokens are signed with RS256 using an RSA private key loaded
+# at startup by Salvorion.Accounts.Keys (path set in config/runtime.exs); the
+# matching public key is served at /.well-known/jwks.json for PowerSync.
+# Never fall back to a symmetric secret here: a symmetric key cannot be
+# published as a JWKS. See docs/DECISIONS.md.
+config :salvorion, Salvorion.Accounts.Guardian,
+  issuer: "salvorion",
+  allowed_algos: ["RS256"],
+  secret_key: {Salvorion.Accounts.Keys, :signing_jwk, []},
+  # Access tokens: 15 minutes. Refresh tokens: 30 days. (Document 10, section 4)
+  token_ttl: %{
+    "access" => {15, :minutes},
+    "refresh" => {30, :days}
+  }
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

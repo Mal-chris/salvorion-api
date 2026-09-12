@@ -23,6 +23,27 @@ end
 config :salvorion, SalvorionWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Path to the RSA private key (PEM) that signs JWTs (RS256). Only the *path*
+# lives in configuration; the key material stays on disk, outside git
+# (/priv/keys/ is git-ignored). See .env.example for how to generate a pair.
+guardian_key_path =
+  case {System.get_env("GUARDIAN_PRIVATE_KEY_PATH"), config_env()} do
+    {nil, :prod} ->
+      raise """
+      environment variable GUARDIAN_PRIVATE_KEY_PATH is missing.
+      It must point at an RSA private key in PEM format, e.g. generated with:
+        openssl genrsa -out guardian_private.pem 2048
+      """
+
+    {nil, _} ->
+      "priv/keys/dev_private.pem"
+
+    {path, _} ->
+      path
+  end
+
+config :salvorion, Salvorion.Accounts.Keys, private_key_path: guardian_key_path
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

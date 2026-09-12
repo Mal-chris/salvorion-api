@@ -7,6 +7,9 @@ defmodule Salvorion.Application do
 
   @impl true
   def start(_type, _args) do
+    # Load the RS256 signing key once; fails fast if it is missing or not RSA.
+    Salvorion.Accounts.Keys.load!()
+
     children = [
       SalvorionWeb.Telemetry,
       Salvorion.Repo,
