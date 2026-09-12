@@ -35,4 +35,10 @@ defmodule SalvorionWeb.ConnCase do
     Salvorion.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc "Puts a Bearer access token for `user` on `conn` (SalvorionWeb.Plugs.Authorize)."
+  def authed(conn, %Salvorion.Accounts.User{} = user) do
+    {:ok, tokens} = Salvorion.Accounts.issue_tokens(user)
+    Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)
+  end
 end

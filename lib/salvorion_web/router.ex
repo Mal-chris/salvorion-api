@@ -27,11 +27,75 @@ defmodule SalvorionWeb.Router do
     post "/refresh", AuthController, :refresh
   end
 
-  # Everything else under /api requires a valid token + an RBAC row.
+  # Everything else under /api requires a valid token + an RBAC row
+  # (SalvorionWeb.RBAC, Document 10 section 1).
   scope "/api", SalvorionWeb do
     pipe_through [:api, :authenticated]
 
     get "/auth/me", AuthController, :me
+
+    # --- Accounts (Task 3) -------------------------------------------------
+    post "/users", UserController, :create
+    get "/users", UserController, :index
+    get "/users/:id", UserController, :show
+    patch "/users/:id/role", UserController, :update_role
+    post "/users/:id/deactivate", UserController, :deactivate
+
+    post "/devices", DeviceController, :create
+    post "/devices/:id/revoke", DeviceController, :revoke
+
+    post "/warden-assignments", WardenAssignmentController, :create
+    get "/warden-assignments", WardenAssignmentController, :index
+
+    # --- Organisation (Task 4) ----------------------------------------------
+    get "/faculties", FacultyController, :index
+    post "/faculties", FacultyController, :create
+    get "/departments", DepartmentController, :index
+    post "/departments", DepartmentController, :create
+    get "/programmes", ProgrammeController, :index
+    post "/programmes", ProgrammeController, :create
+
+    # --- Locations (Task 5) --------------------------------------------------
+    get "/assembly-points", AssemblyPointController, :index
+    post "/assembly-points", AssemblyPointController, :create
+    get "/assembly-points/hierarchy", AssemblyPointController, :hierarchy
+    get "/zones", ZoneController, :index
+    post "/zones", ZoneController, :create
+    get "/areas", AreaController, :index
+    post "/areas", AreaController, :create
+    post "/areas/:id/departments", AreaController, :link_department
+    delete "/areas/:id/departments/:dept_id", AreaController, :unlink_department
+
+    # --- Roster (Task 6) -----------------------------------------------------
+    get "/people", PersonController, :index
+    get "/people/lookup", PersonController, :lookup
+    get "/people/:id", PersonController, :show
+    post "/roster-imports", RosterImportController, :create
+    get "/roster-imports", RosterImportController, :index
+    post "/visitors", VisitorController, :create
+
+    # --- Activations (Task 7) ------------------------------------------------
+    post "/activations", ActivationController, :create
+    patch "/activations/:id/close", ActivationController, :close
+    post "/activations/:id/start", ActivationController, :start
+    get "/activations", ActivationController, :index
+    get "/activations/:id", ActivationController, :show
+
+    # --- Accountability (Task 8) ---------------------------------------------
+    post "/activations/:id/events", EventController, :create
+
+    get "/activations/:id/roll-call", RollCallController, :show
+    get "/activations/:id/zones/:zone_id/roll-call", RollCallController, :zone
+
+    post "/activations/:id/people/:person_id/resolve-contradiction",
+         ContradictionController,
+         :resolve
+
+    get "/activations/:id/dashboard/summary", DashboardController, :summary
+    get "/activations/:id/dashboard/departments", DashboardController, :departments
+    get "/activations/:id/dashboard/faculties", DashboardController, :faculties
+    get "/activations/:id/dashboard/zones", DashboardController, :zones
+    get "/activations/:id/dashboard/unaccounted", DashboardController, :unaccounted
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

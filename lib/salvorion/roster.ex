@@ -128,19 +128,35 @@ defmodule Salvorion.Roster do
       department OR who hold a secondary membership in it through
       `person_departments`
     * `:source`        - `"roster"`, `"synthetic"` or `"visitor_registration"`
-    * `:limit`         - defaults to no limit
+    * `:limit`         - page size, defaults to no limit
+    * `:offset`        - defaults to 0; used with `:limit` for pagination
+      (the one list here large enough to need it — Task 1, Prompt 9)
   """
   @spec list_people(keyword | map) :: [%Person{}]
   def list_people(filters \\ []) do
-    filters = Map.new(filters)
+    filters
+    |> Map.new()
+    |> people_query()
+    |> order_by([p], asc: p.last_name, asc: p.first_name)
+    |> maybe_limit(filters[:limit])
+    |> maybe_offset(filters[:offset])
+    |> Repo.all()
+  end
 
+  @doc "The total count of people matching `list_people/1`'s filters, ignoring `:limit`/`:offset`, for pagination metadata."
+  @spec count_people(keyword | map) :: non_neg_integer
+  def count_people(filters \\ []) do
+    filters
+    |> Map.new()
+    |> people_query()
+    |> Repo.aggregate(:count)
+  end
+
+  defp people_query(filters) do
     Person
     |> filter_eq(:type, filters[:type])
     |> filter_eq(:source, filters[:source])
     |> filter_department(filters[:department_id])
-    |> order_by([p], asc: p.last_name, asc: p.first_name)
-    |> maybe_limit(filters[:limit])
-    |> Repo.all()
   end
 
   @doc """
@@ -552,6 +568,9 @@ defmodule Salvorion.Roster do
 
   defp maybe_limit(query, nil), do: query
   defp maybe_limit(query, n), do: limit(query, ^n)
+
+  defp maybe_offset(query, nil), do: query
+  defp maybe_offset(query, n), do: offset(query, ^n)
 
   # ILIKE treats %, _ and \ specially; a search for "100%" must not match everything.
   defp escape_like(term), do: Regex.replace(~r/[\\%_]/, term, "\\\\\\0")

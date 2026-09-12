@@ -108,6 +108,10 @@ defmodule Salvorion.Locations do
   end
 
   @spec list_areas_for_zone(binary | %Zone{}) :: [%Area{}]
+  @doc "Every area, ordered by name (Task 5, Prompt 9 — the API's plain GET /api/areas)."
+  @spec list_areas() :: [%Area{}]
+  def list_areas, do: Repo.all(from a in Area, order_by: a.name)
+
   def list_areas_for_zone(%Zone{id: zone_id}), do: list_areas_for_zone(zone_id)
 
   def list_areas_for_zone(zone_id) when is_binary(zone_id) do

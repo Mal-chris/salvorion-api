@@ -142,7 +142,14 @@ defmodule Salvorion.Accounts do
   """
   @spec register_device(%User{}, map, opts) :: {:ok, %Device{}} | {:error, Ecto.Changeset.t()}
   def register_device(%User{id: user_id}, attrs, opts \\ []) do
-    attrs = attrs |> Map.new() |> Map.drop([:user_id, "user_id"]) |> Map.put(:user_id, user_id)
+    # Normalised to string keys before Map.put/3: Ecto.Changeset.cast/3
+    # rejects a map mixing atom and string keys, and callers may pass
+    # either (raw JSON params are always string-keyed).
+    attrs =
+      attrs
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.drop(["user_id"])
+      |> Map.put("user_id", user_id)
 
     Multi.new()
     |> Multi.insert(:device, Device.changeset(%Device{}, attrs))
@@ -274,6 +281,23 @@ defmodule Salvorion.Accounts do
         where: is_nil(wa.ends_at) or wa.ends_at >= ^as_of_date
     )
   end
+
+  @doc """
+  Lists warden assignments, most recently created first. Filters (all
+  optional, as a keyword list or map): `:user_id`.
+  """
+  @spec list_warden_assignments(keyword | map) :: [%WardenAssignment{}]
+  def list_warden_assignments(filters \\ []) do
+    filters = Map.new(filters)
+
+    WardenAssignment
+    |> filter_assignment_user(filters[:user_id])
+    |> order_by([wa], desc: wa.inserted_at)
+    |> Repo.all()
+  end
+
+  defp filter_assignment_user(query, nil), do: query
+  defp filter_assignment_user(query, user_id), do: where(query, [wa], wa.user_id == ^user_id)
 
   defp user_id(%User{id: id}), do: id
   defp user_id(id) when is_binary(id), do: id

@@ -295,6 +295,83 @@ anyone else. `list_visitors/1`'s `:active_on` filter and a possible future
 client-side warning on an expired pass are presentation concerns for
 reception/registration screens, not an accountability gate.
 
+## HTTP layer (Prompt 9): pagination is deferred to `GET /api/people`, not forgotten elsewhere
+
+Task 1 asked every success response to be `{data: ...}` or, for a paginated
+list, `{data: [...], meta: {...}}`. Only `GET /api/people` actually paginates
+(`limit`/`offset`, default `limit: 50`, plus `meta.total` via
+`Roster.count_people/1`): with 1,373 people in the dev roster already and a
+roster that only grows, this is the one list an API client could plausibly
+need to page through. Every other list route in this prompt
+(`/api/faculties`, `/api/departments`, `/api/programmes`,
+`/api/assembly-points`, `/api/zones`, `/api/areas`, `/api/users`,
+`/api/warden-assignments`, `/api/roster-imports`, `/api/activations`, every
+dashboard read) returns its full result unpaginated: none of these tables
+are expected to reach a size where that matters in Release 1 (a few dozen
+zones/areas/departments, a few users, a handful of activations per term).
+`list_audit_logs/1` (`Salvorion.Audit`) already takes a `:limit` — it has no
+route yet (audit log viewing is a later prompt) but will paginate the same
+way `list_people/1` does when that route is built. This is a scoping
+decision to revisit if any of these other lists turns out to grow
+unexpectedly large, not an oversight.
+
+## HTTP layer (Prompt 9): the RBAC entries that don't come straight from Document 10 section 1
+
+Most of `SalvorionWeb.RBAC`'s new rows cite a section 1 row directly, cited
+in a comment next to the row itself. Four don't, or extend one beyond its
+literal reading, each recorded here as well since a reviewer scanning
+`docs/10-security-design.md` side-by-side with the matrix would otherwise
+wonder where they came from:
+
+- **`GET /api/faculties`/`/departments`/`/programmes`, `GET
+  /api/assembly-points`/`/zones`/`/areas`, `GET /api/people`.** Not a
+  section 1 row at all — section 1 only lists *write* permissions for these
+  resources ("Manage assembly points, zones, areas", "Manage departments,
+  faculties, programmes"); reading them is covered instead by section 2's
+  data classification table ("Directory information ... visible to any
+  authenticated user role in the course of their duties"). All reads here
+  are `@all_roles`.
+- **`POST /api/faculties`/`/departments`/`/programmes`: admin only, not
+  osh_officer.** The prompt that specified this route anticipated needing
+  to *guess* this permission (asking me to fall back to Locations' shape
+  and flag it for confirmation if organisation management wasn't listed
+  separately). It didn't need guessing: Document 10 section 1 has its own
+  row, "Manage departments, faculties, programmes: Yes / No / No / No" —
+  admin only, explicitly distinct from "Manage assembly points, zones,
+  areas" (Yes/Yes/No/No), which does include OSH Officer. I implemented the
+  literal row rather than the fallback the prompt offered.
+- **`POST /api/devices/:id/revoke`: every role passes the RBAC gate.**
+  Section 1 has no row for this at all (device revocation isn't in the
+  matrix); the permission comes from section 4 ("a lost or decommissioned
+  device's access can be revoked") plus the later prompt's own instruction
+  ("admin, or the device's own user"). Ownership isn't a role, so the table
+  can't express it — every authenticated role is let through, and
+  `DeviceController.revoke/2` does the actual admin-or-owner check,
+  returning `{:error, :forbidden}` (403) otherwise.
+- **`GET /api/activations/:id`: extended to `warden`, beyond "View
+  activation history"'s literal No.** Section 1's "View activation
+  history: Yes/Yes/No/Yes" is about the *list* of past activations
+  (`GET /api/activations`, which stays admin/osh_officer/report_viewer
+  only). A warden fetching the *one* activation they are currently working
+  — to know its type, status, and timing while using the roll-call screen
+  — is a different, narrower thing than browsing history, and the app
+  cannot function for a warden without it (the roll-call screen needs to
+  show the activation's own status and type). This is a judgment call, not
+  a literal section 1 entry; flagging it for confirmation rather than
+  presenting it as if the matrix settled it.
+- **`POST /api/activations/:id/events`: allows `admin`/`osh_officer` to
+  post a `roll_call` kind, though section 1's "Conduct roll call" row lists
+  only Safety Warden as Yes.** This route is one shared ingest endpoint for
+  every event kind (`scanned`, `manual`, `roll_call`, `visitor_registered`,
+  `override`, `contradiction_resolved`), not a roll-call-specific one, so it
+  takes the union of roles that need *any* kind through it — including
+  "Perform sign-in" and "Register a visitor" (both Yes/Yes/Yes/No). Nothing
+  in the app currently stops an admin from posting a `roll_call` kind here,
+  which the matrix's literal per-row reading would not grant them. Noted as
+  a gap between "one endpoint per kind" (unambiguous) and "one endpoint for
+  every kind" (what was actually asked for), not something I resolved by
+  splitting the route.
+
 ## Scaffolding choices (for reference)
 
 - Generated with `mix phx.new . --app salvorion --module Salvorion --no-html --no-assets --no-live --binary-id`
