@@ -4,7 +4,7 @@ defmodule SalvorionWeb.EventControllerTest do
   import Salvorion.AccountsFixtures
   import Salvorion.RosterFixtures
 
-  alias Salvorion.Activations
+  alias Salvorion.{Accountability, Activations, Audit}
 
   defp event_attrs(person, overrides \\ %{}) do
     Map.merge(
@@ -124,6 +124,91 @@ defmodule SalvorionWeb.EventControllerTest do
         |> post(
           ~p"/api/activations/#{activation.id}/events",
           event_attrs(person, %{kind: "override", status: "excused", note: "phoned"})
+        )
+
+      assert json_response(conn, 403)
+    end
+
+    test "a forged recorded_by_id in the request body does not bypass the override role check",
+         %{conn: conn} do
+      officer = user_fixture(%{role: "osh_officer"})
+
+      {:ok, activation} =
+        Activations.start_activation(%{activation_type: "drill"}, actor: officer)
+
+      warden = user_fixture(%{role: "warden"})
+      person = person_fixture()
+
+      # The warden authenticates as themselves but claims, in the body,
+      # to be the osh_officer — before the fix this made the override
+      # permission check (which reads recorded_by_id, not the token) pass.
+      conn =
+        conn
+        |> authed(warden)
+        |> post(
+          ~p"/api/activations/#{activation.id}/events",
+          event_attrs(person, %{
+            kind: "override",
+            status: "excused",
+            note: "phoned",
+            recorded_by_id: officer.id
+          })
+        )
+
+      assert json_response(conn, 403)
+    end
+
+    test "a forged recorded_by_id in the request body is ignored — the authenticated caller is recorded, always",
+         %{conn: conn} do
+      officer = user_fixture(%{role: "osh_officer"})
+
+      {:ok, activation} =
+        Activations.start_activation(%{activation_type: "drill"}, actor: officer)
+
+      warden = user_fixture(%{role: "warden"})
+      someone_else = user_fixture(%{role: "osh_officer"})
+      person = person_fixture()
+
+      conn =
+        conn
+        |> authed(warden)
+        |> post(
+          ~p"/api/activations/#{activation.id}/events",
+          event_attrs(person, %{recorded_by_id: someone_else.id})
+        )
+
+      assert %{"data" => %{"id" => event_id}} = json_response(conn, 201)
+
+      assert [event] = Accountability.list_events_for_person(activation.id, person.id)
+      assert event.id == event_id
+      assert event.recorded_by_id == warden.id
+      refute event.recorded_by_id == someone_else.id
+
+      assert [audit_row] =
+               Audit.list_audit_logs(entity_type: "accountability_event", entity_id: event_id)
+
+      assert audit_row.actor_user_id == warden.id
+    end
+
+    test "a device_id belonging to a different user is rejected, not silently accepted", %{
+      conn: conn
+    } do
+      officer = user_fixture(%{role: "osh_officer"})
+
+      {:ok, activation} =
+        Activations.start_activation(%{activation_type: "drill"}, actor: officer)
+
+      warden = user_fixture(%{role: "warden"})
+      someone_else = user_fixture(%{role: "warden"})
+      their_device = device_fixture(someone_else)
+      person = person_fixture()
+
+      conn =
+        conn
+        |> authed(warden)
+        |> post(
+          ~p"/api/activations/#{activation.id}/events",
+          event_attrs(person, %{device_id: their_device.id})
         )
 
       assert json_response(conn, 403)

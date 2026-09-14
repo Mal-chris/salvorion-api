@@ -150,6 +150,44 @@ defmodule Salvorion.ActivationsTest do
       assert msg =~ "does not exist"
       assert Repo.aggregate(Activation, :count) == 0
     end
+
+    test "a forged started_by_id and a backdated started_at in attrs are both ignored" do
+      officer = user_fixture()
+      someone_else = user_fixture()
+      backdated = DateTime.add(DateTime.utc_now(), -7 * 24 * 60 * 60, :second)
+
+      before_call = DateTime.utc_now()
+
+      assert {:ok, activation} =
+               Activations.start_activation(
+                 %{
+                   activation_type: "real",
+                   started_by_id: someone_else.id,
+                   started_at: backdated
+                 },
+                 actor: officer
+               )
+
+      after_call = DateTime.utc_now()
+
+      # attributed to the real caller, never the forged id
+      assert activation.started_by_id == officer.id
+      refute activation.started_by_id == someone_else.id
+
+      # started_at is the real moment of the call, never the backdated value
+      assert DateTime.compare(activation.started_at, before_call) in [:gt, :eq]
+      assert DateTime.compare(activation.started_at, after_call) in [:lt, :eq]
+      refute DateTime.compare(activation.started_at, backdated) == :eq
+
+      assert [log] =
+               Audit.list_audit_logs(
+                 entity_type: "activation",
+                 entity_id: activation.id,
+                 action: "activation.started"
+               )
+
+      assert log.actor_user_id == officer.id
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -76,14 +76,21 @@ defmodule Salvorion.Activations do
   @doc """
   Schedules an activation in advance (`schedule_changeset/2`); it stays
   `"scheduled"` until `start_activation/2` is called on it. `attrs` needs
-  `:activation_type`, `:started_at` (the planned start time) and,
-  when `scope` is `"zones"` (the default is `"campus"`), a `:zone_ids`
-  list, every id validated to exist. `:started_by_id` is not accepted in
-  `attrs`; it comes from `opts[:actor]`.
+  `:activation_type`, `:started_at` (the planned start time — a caller
+  may legitimately supply a future timestamp here, since scheduling
+  ahead is the whole point of this function; defaults to now if omitted)
+  and, when `scope` is `"zones"` (the default is `"campus"`), a
+  `:zone_ids` list, every id validated to exist. `:started_by_id` in
+  `attrs` is ignored, always overwritten from `opts[:actor]`
+  (docs/DECISIONS.md, "event attribution could be forged").
   """
   @spec schedule_activation(map, opts) :: {:ok, %Activation{}} | {:error, Ecto.Changeset.t()}
   def schedule_activation(attrs, opts \\ []) do
-    attrs = normalize_attrs(attrs, opts)
+    attrs =
+      attrs
+      |> normalize_attrs(opts)
+      |> Map.put_new("started_at", DateTime.utc_now())
+
     zone_ids = extract_zone_ids(attrs)
     changeset = Activation.schedule_changeset(%Activation{}, attrs)
 
@@ -101,9 +108,20 @@ defmodule Salvorion.Activations do
   Starts an activation. Given `attrs` (a map), creates and activates it
   directly in one step (`start_changeset/2`) — the common case, since
   most drills and all real emergencies start immediately with no
-  scheduling step. Given an existing `%Activation{status: "scheduled"}`,
-  transitions it to `"active"` instead, refreshing `started_at` to now
-  and reusing the zones it was scheduled against.
+  scheduling step. `started_by_id` and `started_at` in `attrs` are
+  ignored: `started_by_id` always comes from `opts[:actor]`, and
+  `started_at` is always `DateTime.utc_now()` at the moment of the call
+  — an activation cannot be scheduled in the past or attributed to
+  someone other than the authenticated caller (docs/DECISIONS.md,
+  "event attribution could be forged"; unlike `schedule_activation/2`,
+  this is the path `POST /api/activations` actually calls with raw
+  request params, so `started_at` here is the real, consequential
+  moment warden scope pinning and every dashboard figure are computed
+  from — it is never a caller-suppliable planned time the way
+  `schedule_activation/2`'s is). Given an existing
+  `%Activation{status: "scheduled"}`, transitions it to `"active"`
+  instead, refreshing `started_at` to now and reusing the zones it was
+  scheduled against.
 
   Either path takes the advisory lock and runs the zone-overlap check
   described in the module doc before the activation becomes active, and
@@ -118,7 +136,11 @@ defmodule Salvorion.Activations do
   def start_activation(attrs_or_activation, opts \\ [])
 
   def start_activation(attrs, opts) when is_map(attrs) and not is_struct(attrs) do
-    attrs = normalize_attrs(attrs, opts)
+    attrs =
+      attrs
+      |> normalize_attrs(opts)
+      |> Map.put("started_at", DateTime.utc_now())
+
     zone_ids = extract_zone_ids(attrs)
     changeset = Activation.start_changeset(%Activation{}, attrs)
 
@@ -420,11 +442,16 @@ defmodule Salvorion.Activations do
   # Helpers
   # ---------------------------------------------------------------------------
 
+  # started_by_id is always the authenticated actor, never a
+  # client-supplied value — Map.put, not Map.put_new (docs/DECISIONS.md,
+  # "event attribution could be forged"). started_at is deliberately
+  # NOT set here: schedule_activation/2 and start_activation/2 need
+  # different rules for it (see each function's own doc), so each
+  # applies its own started_at policy after calling this.
   defp normalize_attrs(attrs, opts) do
     attrs
     |> Map.new(fn {k, v} -> {to_string(k), v} end)
-    |> Map.put_new("started_by_id", actor_id(opts))
-    |> Map.put_new("started_at", DateTime.utc_now())
+    |> Map.put("started_by_id", actor_id(opts))
   end
 
   defp extract_zone_ids(attrs) do

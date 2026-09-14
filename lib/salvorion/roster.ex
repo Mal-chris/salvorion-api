@@ -618,15 +618,18 @@ defmodule Salvorion.Roster do
       visitor_expires_at: p.visitor_expires_at
     }
 
+  # Deliberately NOT person_snapshot/1: that includes name, phone, email
+  # and host, which would sit in audit_logs.after forever, immune to
+  # purge_expired_visitors/1 (which only ever touches the people table —
+  # docs/DECISIONS.md, "the visitor-registration audit row kept personal
+  # data purge_expired_visitors/1 never reached"). person_id and the pass
+  # code are enough to find the (by-then-anonymised) person row and the
+  # events keyed off them if this action is ever audited-for; nothing
+  # here is itself personal data.
   defp visitor_snapshot(%Person{} = p),
     do: %{
-      id: p.id,
+      person_id: p.id,
       pass_code: p.id_number,
-      first_name: p.first_name,
-      last_name: p.last_name,
-      visitor_host: p.visitor_host,
-      phone: p.phone,
-      email: p.email,
       visitor_expires_at: p.visitor_expires_at
     }
 

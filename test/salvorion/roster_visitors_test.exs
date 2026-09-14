@@ -32,8 +32,73 @@ defmodule Salvorion.RosterVisitorsTest do
       assert [log] = Audit.list_audit_logs(entity_type: "person", entity_id: person.id)
       assert log.action == "visitor.registered"
       assert log.actor_user_id == officer.id
+      assert log.after["person_id"] == person.id
       assert log.after["pass_code"] == person.id_number
-      assert log.after["visitor_host"] == "Prof. Ashgrove"
+      assert log.after["visitor_expires_at"] == to_string(person.visitor_expires_at)
+
+      # no personal data in this audit row — see the "no personal data
+      # in the visitor.registered audit row" test below for the full check
+      refute Map.has_key?(log.after, "first_name")
+      refute Map.has_key?(log.after, "visitor_host")
+    end
+
+    test "the visitor.registered audit row's after payload carries no personal data" do
+      assert {:ok, person, nil} =
+               Roster.register_visitor(%{
+                 first_name: "Private",
+                 last_name: "Griffiths",
+                 visitor_host: "Dr. Okonkwo",
+                 phone: "876-555-0142",
+                 email: "private.griffiths@example.com"
+               })
+
+      assert [log] = Audit.list_audit_logs(entity_type: "person", entity_id: person.id)
+      assert log.action == "visitor.registered"
+
+      personal_fields = ~w(first_name last_name name visitor_host host phone email)
+
+      for field <- personal_fields do
+        refute Map.has_key?(log.after, field),
+               "audit after-payload for visitor.registered must not carry #{field}, got: #{inspect(log.after)}"
+      end
+
+      # every value actually present must not itself be one of the
+      # personal values supplied above (guards against the field being
+      # renamed rather than removed)
+      values = Map.values(log.after)
+      refute person.first_name in values
+      refute person.last_name in values
+      refute "Dr. Okonkwo" in values
+      refute "876-555-0142" in values
+      refute "private.griffiths@example.com" in values
+    end
+
+    test "purging a visitor does not need to touch their registration audit row, because it was never written there" do
+      assert {:ok, person, nil} =
+               Roster.register_visitor(%{
+                 first_name: "ToBePurged",
+                 last_name: "Visitor",
+                 visitor_host: "Someone",
+                 phone: "555-0199",
+                 email: "purge-me@example.com",
+                 visitor_expires_at: Date.add(Date.utc_today(), -91)
+                 # default 90-day retention makes this eligible immediately
+               })
+
+      assert [log_before] = Audit.list_audit_logs(entity_type: "person", entity_id: person.id)
+      refute Map.has_key?(log_before.after, "first_name")
+      refute Map.has_key?(log_before.after, "visitor_host")
+
+      assert {:ok, 1} = Roster.purge_expired_visitors()
+
+      assert [log_after] = Audit.list_audit_logs(entity_type: "person", entity_id: person.id)
+
+      # unchanged: the registration audit row is not touched by the purge
+      assert log_after.after == log_before.after
+      refute Map.has_key?(log_after.after, "first_name")
+      refute Map.has_key?(log_after.after, "visitor_host")
+      refute Map.has_key?(log_after.after, "phone")
+      refute Map.has_key?(log_after.after, "email")
     end
 
     test "requires visitor_host" do
