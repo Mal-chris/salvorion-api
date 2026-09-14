@@ -1,5 +1,5 @@
 defmodule SalvorionWeb.VisitorControllerTest do
-  use SalvorionWeb.ConnCase, async: true
+  use SalvorionWeb.ConnCase, async: false
 
   import Salvorion.AccountsFixtures
 

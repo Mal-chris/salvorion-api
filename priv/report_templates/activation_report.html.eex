@@ -1,0 +1,211 @@
+<!--
+  Activation report template (Prompt 11, Task 3).
+
+  FIRST DRAFT FOR OSH TO REACT TO (Document 05, Appendix A, item 12:
+  "Report format ... Draft format proposed for OSH review before
+  Release 1"). This is not a final design. Layout, wording and styling
+  are all expected to change once OSH has seen a real one.
+
+  Rendered by Salvorion.Reporting.render_report_pdf/1 (compiled with
+  Phoenix.HTML.Engine, so `<%= %>` HTML-escapes every interpolated
+  value) against the assigns produced by
+  Salvorion.Reporting.compile_report_data/1, then POSTed to Gotenberg
+  as a standalone document - no external stylesheet or script requests,
+  everything needed is inline below.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Activation Report</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    color: #1a1a1a;
+    margin: 32px;
+  }
+  h1, h2 { margin: 0 0 8px; }
+  h2 { margin-top: 28px; font-size: 15px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e0e0e0; font-size: 11px; }
+  th { background: #f2f2f2; font-weight: 600; }
+  .banner {
+    padding: 16px 20px;
+    border-radius: 4px;
+    color: #fff;
+    margin-bottom: 16px;
+  }
+  .banner.real { background: #b3261e; }
+  .banner.drill { background: #3b5bdb; }
+  .banner .kind { font-size: 22px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+  .banner .sub { font-size: 12px; opacity: 0.9; margin-top: 2px; }
+  .meta { display: flex; gap: 32px; margin-bottom: 8px; }
+  .meta div { flex: 1; }
+  .meta .label { font-size: 10px; text-transform: uppercase; color: #666; }
+  .meta .value { font-size: 13px; font-weight: 600; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  .card {
+    flex: 1;
+    min-width: 90px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  .card .n { font-size: 18px; font-weight: 700; }
+  .card .l { font-size: 10px; text-transform: uppercase; color: #666; }
+  .empty { color: #888; font-style: italic; padding: 8px 0; }
+  .contradiction { color: #b3261e; font-weight: 600; }
+  footer { margin-top: 32px; font-size: 10px; color: #888; }
+</style>
+</head>
+<body>
+
+<div class="banner <%= @activation.activation_type %>">
+  <div class="kind">
+    <%= if @activation.activation_type == "real" do %>
+      Real Emergency
+    <% else %>
+      Drill
+    <% end %>
+  </div>
+  <div class="sub">Scope: <%= @activation.scope %> &middot; Activation report</div>
+</div>
+
+<h1>Activation Accountability Report</h1>
+
+<div class="meta">
+  <div>
+    <div class="label">Started</div>
+    <div class="value"><%= @activation.started_at %></div>
+  </div>
+  <div>
+    <div class="label">Closed</div>
+    <div class="value"><%= @activation.closed_at %></div>
+  </div>
+  <div>
+    <div class="label">Activation ID</div>
+    <div class="value"><%= @activation.id %></div>
+  </div>
+</div>
+
+<h2>Summary</h2>
+<div class="cards">
+  <div class="card"><div class="n"><%= @summary.expected %></div><div class="l">Expected</div></div>
+  <div class="card"><div class="n"><%= @summary.present %></div><div class="l">Present</div></div>
+  <div class="card"><div class="n"><%= @summary.absent %></div><div class="l">Absent</div></div>
+  <div class="card"><div class="n"><%= @summary.excused %></div><div class="l">Excused</div></div>
+  <div class="card"><div class="n"><%= @summary.unaccounted %></div><div class="l">Unaccounted</div></div>
+  <div class="card"><div class="n"><%= @summary.present_unexpected %></div><div class="l">Present, unexpected</div></div>
+  <div class="card"><div class="n"><%= @summary.open_contradictions %></div><div class="l">Open contradictions</div></div>
+  <div class="card"><div class="n"><%= @summary.events %></div><div class="l">Total events</div></div>
+</div>
+
+<h2>Participation by department</h2>
+<%= if @by_department == [] do %>
+  <p class="empty">No department data for this activation.</p>
+<% else %>
+<table>
+  <thead>
+    <tr>
+      <th>Department</th><th>Expected</th><th>Present</th><th>Absent</th><th>Excused</th>
+      <th>Unaccounted</th><th>Participation</th><th>Accounted</th>
+    </tr>
+  </thead>
+  <tbody>
+    <%= for row <- @by_department do %>
+    <tr>
+      <td><%= row.department_name %></td>
+      <td><%= row.expected %></td>
+      <td><%= row.present %></td>
+      <td><%= row.absent %></td>
+      <td><%= row.excused %></td>
+      <td><%= row.unaccounted %></td>
+      <td><%= Salvorion.Reporting.format_rate(row.participation_rate) %></td>
+      <td><%= Salvorion.Reporting.format_rate(row.accounted_rate) %></td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
+<% end %>
+
+<h2>Participation by faculty</h2>
+<%= if @by_faculty == [] do %>
+  <p class="empty">No faculty data for this activation.</p>
+<% else %>
+<table>
+  <thead>
+    <tr>
+      <th>Faculty</th><th>Expected</th><th>Present</th><th>Absent</th><th>Excused</th>
+      <th>Unaccounted</th><th>Participation</th><th>Accounted</th>
+    </tr>
+  </thead>
+  <tbody>
+    <%= for row <- @by_faculty do %>
+    <tr>
+      <td><%= row.faculty_name %></td>
+      <td><%= row.expected %></td>
+      <td><%= row.present %></td>
+      <td><%= row.absent %></td>
+      <td><%= row.excused %></td>
+      <td><%= row.unaccounted %></td>
+      <td><%= Salvorion.Reporting.format_rate(row.participation_rate) %></td>
+      <td><%= Salvorion.Reporting.format_rate(row.accounted_rate) %></td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
+<% end %>
+
+<h2>Unaccounted individuals (<%= length(@unaccounted) %>)</h2>
+<%= if @unaccounted == [] do %>
+  <p class="empty">Nobody unaccounted.</p>
+<% else %>
+<table>
+  <thead>
+    <tr><th>Name</th><th>ID number</th><th>Type</th><th>Department</th><th>Usual area</th></tr>
+  </thead>
+  <tbody>
+    <%= for p <- @unaccounted do %>
+    <tr>
+      <td><%= p.last_name %>, <%= p.first_name %></td>
+      <td><%= p.id_number %></td>
+      <td><%= p.type %></td>
+      <td><%= p.department_name %></td>
+      <td><%= p.usual_area_name %></td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
+<% end %>
+
+<h2>Manual sign-in log (<%= length(@manual_events) %>)</h2>
+<%= if @manual_events == [] do %>
+  <p class="empty">No manual sign-ins were recorded during this activation.</p>
+<% else %>
+<table>
+  <thead>
+    <tr><th>Name</th><th>ID number</th><th>Status</th><th>Recorded by</th><th>Time</th><th>Note</th></tr>
+  </thead>
+  <tbody>
+    <%= for e <- @manual_events do %>
+    <tr>
+      <td><%= e.last_name %>, <%= e.first_name %></td>
+      <td><%= e.id_number %></td>
+      <td><%= e.status %></td>
+      <td><%= e.recorded_by_email %></td>
+      <td><%= e.server_timestamp %></td>
+      <td><%= e.note %></td>
+    </tr>
+    <% end %>
+  </tbody>
+</table>
+<% end %>
+
+<footer>
+  Generated by Salvorion. Draft report format, pending OSH review (Document 05, Appendix A).
+</footer>
+
+</body>
+</html>

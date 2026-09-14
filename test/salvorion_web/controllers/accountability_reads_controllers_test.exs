@@ -2,7 +2,7 @@ defmodule SalvorionWeb.AccountabilityReadsControllersTest do
   @moduledoc """
   Roll-call, contradiction resolution and the dashboard reads (Task 8).
   """
-  use SalvorionWeb.ConnCase, async: true
+  use SalvorionWeb.ConnCase, async: false
 
   import Salvorion.AccountsFixtures
   import Salvorion.RosterFixtures

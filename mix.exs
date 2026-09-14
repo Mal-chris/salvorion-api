@@ -64,7 +64,13 @@ defmodule Salvorion.MixProject do
       # OpenAPI spec generation from routes/schemas
       {:open_api_spex, "~> 3.22"},
       # CSV parsing for the roster FileImport provider
-      {:nimble_csv, "~> 1.3"}
+      {:nimble_csv, "~> 1.3"},
+      # Amazon SES adapter for Swoosh (prod only; see docs/DECISIONS.md
+      # and config/runtime.exs). Neither requires AWS credentials to
+      # compile or to run mix test - Swoosh.Adapters.AmazonSES is never
+      # configured outside config_env() == :prod.
+      {:ex_aws, "~> 2.5"},
+      {:ex_aws_ses, "~> 2.4"}
     ]
   end
 

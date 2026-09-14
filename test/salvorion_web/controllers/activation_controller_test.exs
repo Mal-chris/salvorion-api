@@ -1,9 +1,20 @@
 defmodule SalvorionWeb.ActivationControllerTest do
-  use SalvorionWeb.ConnCase, async: true
+  # async: false — every test here calls start_activation/2, which
+  # serialises on a single fixed advisory-lock key (see ActivationsTest's
+  # own comment). Running async made this file an intermittent
+  # `query_canceled` flake once the full suite's overall run time grew
+  # (Prompt 11 added several real-Gotenberg-HTTP-bound async: false
+  # tests elsewhere, widening the window other async tests overlap in);
+  # this test file passes in isolation regardless, which is what made
+  # the cause easy to misdiagnose as a Prompt 11 regression rather than
+  # a pre-existing async-safety gap this file always had.
+  use SalvorionWeb.ConnCase, async: false
+  use Oban.Testing, repo: Salvorion.Repo
 
   import Salvorion.AccountsFixtures
 
   alias Salvorion.Activations
+  alias Salvorion.Reporting.Workers.GenerateReportWorker
 
   describe "POST /api/activations" do
     test "osh_officer starts one; admin gets 403 (deliberately not admin — Prompt 5)", %{
@@ -36,7 +47,9 @@ defmodule SalvorionWeb.ActivationControllerTest do
 
       {:ok, scheduled} =
         Activations.schedule_activation(
-          %{activation_type: "drill", started_at: DateTime.utc_now()}, actor: osh)
+          %{activation_type: "drill", started_at: DateTime.utc_now()},
+          actor: osh
+        )
 
       start_conn = conn |> authed(osh) |> post(~p"/api/activations/#{scheduled.id}/start")
       assert %{"data" => %{"status" => "active"}} = json_response(start_conn, 200)
@@ -48,7 +61,9 @@ defmodule SalvorionWeb.ActivationControllerTest do
 
       {:ok, scheduled2} =
         Activations.schedule_activation(
-          %{activation_type: "drill", started_at: DateTime.utc_now()}, actor: osh)
+          %{activation_type: "drill", started_at: DateTime.utc_now()},
+          actor: osh
+        )
 
       assert json_response(
                conn |> authed(warden) |> post(~p"/api/activations/#{scheduled2.id}/start"),
@@ -59,6 +74,17 @@ defmodule SalvorionWeb.ActivationControllerTest do
                conn |> authed(warden) |> patch(~p"/api/activations/#{scheduled2.id}/close"),
                403
              )
+    end
+
+    test "closing enqueues GenerateReportWorker (FR-REP-01; Document 08 section 4)", %{
+      conn: conn
+    } do
+      osh = user_fixture(%{role: "osh_officer"})
+      {:ok, activation} = Activations.start_activation(%{activation_type: "drill"}, actor: osh)
+
+      conn |> authed(osh) |> patch(~p"/api/activations/#{activation.id}/close")
+
+      assert_enqueued(worker: GenerateReportWorker, args: %{activation_id: activation.id})
     end
   end
 

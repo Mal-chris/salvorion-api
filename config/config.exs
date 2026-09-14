@@ -31,6 +31,18 @@ config :salvorion, SalvorionWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :salvorion, Salvorion.Mailer, adapter: Swoosh.Adapters.Local
 
+# Gotenberg (PDF rendering; docker-compose.yml). Overridable via the
+# GOTENBERG_URL env var at runtime (config/runtime.exs) for any
+# environment; this default matches GOTENBERG_PORT's default in
+# .env.example.
+config :salvorion, :gotenberg_url, "http://localhost:3000"
+
+# The "From" address on report emails (Task 6). A real sending domain
+# is a production concern (SES requires a verified domain/address); this
+# default is fine for dev's Local adapter and test's Test adapter, and
+# overridable via REPORT_FROM_EMAIL at runtime for prod.
+config :salvorion, :report_from_email, "reports@salvorion.local"
+
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",

@@ -20,6 +20,8 @@ defmodule Salvorion.Reporting.ReportRun do
 
     belongs_to :activation, Salvorion.Activations.Activation
 
+    has_many :deliveries, Salvorion.Reporting.ReportDelivery
+
     many_to_many :recipients, Salvorion.Reporting.ReportRecipient,
       join_through: "report_deliveries",
       join_keys: [report_run_id: :id, report_recipient_id: :id]

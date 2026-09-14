@@ -96,6 +96,15 @@ defmodule SalvorionWeb.Router do
     get "/activations/:id/dashboard/faculties", DashboardController, :faculties
     get "/activations/:id/dashboard/zones", DashboardController, :zones
     get "/activations/:id/dashboard/unaccounted", DashboardController, :unaccounted
+
+    # --- Reporting (Task 11) -------------------------------------------------
+    post "/report-recipients", ReportRecipientController, :create
+    get "/report-recipients", ReportRecipientController, :index
+    patch "/report-recipients/:id", ReportRecipientController, :update
+
+    get "/activations/:id/reports", ReportController, :index
+    get "/activations/:id/reports/:run_id/download", ReportController, :download
+    post "/activations/:id/reports/regenerate", ReportController, :regenerate
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

@@ -701,6 +701,40 @@ defmodule Salvorion.Accountability do
     )
   end
 
+  @doc """
+  Every `kind: "manual"` event in the activation (FR-REP-02's "record of
+  manual sign-ins"), joined to the person and the recording user, oldest
+  first by `server_timestamp` (I2). Unlike `list_events_for_person/2`,
+  this is activation-wide, not scoped to one person - it did not exist
+  before Prompt 11 because nothing needed it until the report template
+  did.
+  """
+  @spec list_manual_events(binary) :: [map]
+  def list_manual_events(activation_id) do
+    Repo.all(
+      from e in AccountabilityEvent,
+        join: p in Person,
+        as: :person,
+        on: p.id == e.person_id,
+        join: u in User,
+        as: :recorded_by,
+        on: u.id == e.recorded_by_id,
+        where: e.activation_id == ^activation_id and e.kind == "manual",
+        order_by: [asc: e.server_timestamp, asc: e.id],
+        select: %{
+          event_id: e.id,
+          person_id: p.id,
+          id_number: p.id_number,
+          first_name: p.first_name,
+          last_name: p.last_name,
+          status: e.status,
+          note: e.note,
+          recorded_by_email: u.email,
+          server_timestamp: e.server_timestamp
+        }
+    )
+  end
+
   @spec get_person_status(binary, binary) :: %PersonStatus{} | nil
   def get_person_status(activation_id, person_id),
     do: Repo.get_by(PersonStatus, activation_id: activation_id, person_id: person_id)

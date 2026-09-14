@@ -62,3 +62,8 @@ $RECYCLE.BIN/
 /tools/powersync-verify/*.db
 /tools/powersync-verify/*.db-wal
 /tools/powersync-verify/*.db-shm
+
+# Generated report PDFs (Prompt 11, Task 4): dev-only artefact storage.
+# Production will need real object storage instead - see docs/DECISIONS.md.
+# The directory itself stays tracked via .gitkeep.
+/priv/generated_reports/*.pdf

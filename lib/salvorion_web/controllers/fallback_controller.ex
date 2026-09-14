@@ -30,6 +30,11 @@ defmodule SalvorionWeb.FallbackController do
   def call(conn, {:error, :unknown_person}), do: send_status(conn, :not_found)
   def call(conn, {:error, :activation_not_found}), do: send_status(conn, :not_found)
 
+  # Reporting (Prompt 11, Task 8): the run exists but has no PDF to
+  # serve yet (`pending`) or never will (`failed`) - never a broken or
+  # partial download.
+  def call(conn, {:error, :report_not_ready}), do: send_status(conn, :not_found)
+
   # --- Forbidden (authenticated, but not permitted for this specific
   # resource — distinct from the route-level 403 the RBAC plug already
   # gives an unauthorised role before the controller ever runs) ---------

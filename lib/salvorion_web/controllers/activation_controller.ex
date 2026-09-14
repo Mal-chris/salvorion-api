@@ -6,6 +6,12 @@ defmodule SalvorionWeb.ActivationController do
   Administrator", Prompt 5); do not widen `SalvorionWeb.RBAC`'s entries
   for these three routes to match Locations/Organisation's admin+osh
   shape.
+
+  `close/2` also enqueues `GenerateReportWorker` (Prompt 11, FR-REP-01;
+  Document 08 section 4's sequence diagram: the API layer enqueues the
+  report job right after the Activations context reports the
+  transition succeeded, not the context itself — `Salvorion.Activations`
+  has no dependency on `Salvorion.Reporting`, and this keeps it that way).
   """
   use SalvorionWeb, :controller
 
@@ -13,6 +19,7 @@ defmodule SalvorionWeb.ActivationController do
 
   alias Salvorion.Activations
   alias Salvorion.Activations.Activation
+  alias Salvorion.Reporting.Workers.GenerateReportWorker
 
   @known_filters ~w(status activation_type)
 
@@ -39,6 +46,7 @@ defmodule SalvorionWeb.ActivationController do
            Activations.close_activation(Activations.get_activation!(id),
              actor: conn.assigns.current_user_id
            ) do
+      {:ok, _job} = %{activation_id: activation.id} |> GenerateReportWorker.new() |> Oban.insert()
       json(conn, %{data: activation_json(activation)})
     end
   end

@@ -1,5 +1,5 @@
 defmodule Salvorion.RosterVisitorsTest do
-  use Salvorion.DataCase, async: true
+  use Salvorion.DataCase, async: false
 
   import Salvorion.AccountsFixtures
 

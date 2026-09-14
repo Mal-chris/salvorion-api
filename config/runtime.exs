@@ -44,6 +44,14 @@ guardian_key_path =
 
 config :salvorion, Salvorion.Accounts.Keys, private_key_path: guardian_key_path
 
+if url = System.get_env("GOTENBERG_URL") do
+  config :salvorion, :gotenberg_url, url
+end
+
+if from = System.get_env("REPORT_FROM_EMAIL") do
+  config :salvorion, :report_from_email, from
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
@@ -121,21 +129,28 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 
-  # ## Configuring the mailer
+  # ## Mailer (Prompt 11, Task 6; docs/DECISIONS.md)
   #
-  # In production you need to configure the mailer to use a different adapter.
-  # Here is an example configuration for Mailgun:
-  #
-  #     config :salvorion, Salvorion.Mailer,
-  #       adapter: Swoosh.Adapters.Mailgun,
-  #       api_key: System.get_env("MAILGUN_API_KEY"),
-  #       domain: System.get_env("MAILGUN_DOMAIN")
-  #
-  # Most non-SMTP adapters require an API client. Swoosh supports Req, Hackney,
-  # and Finch out-of-the-box. This configuration is typically done at
-  # compile-time in your config/prod.exs:
-  #
-  #     config :swoosh, :api_client, Swoosh.ApiClient.Req
-  #
-  # See https://swoosh.hexdocs.pm/Swoosh.html#module-installation for details.
+  # Amazon SES, prod ONLY - dev uses Swoosh.Adapters.Local (config.exs),
+  # test uses Swoosh.Adapters.Test (config/test.exs). Guarded by
+  # config_env() exactly like the Guardian key path above, so there is
+  # no code path in dev or test that ever tries to reach AWS. This is
+  # the interface being made complete and swappable via config alone;
+  # SES itself is unverified until real AWS credentials exist.
+  aws_access_key_id =
+    System.get_env("AWS_ACCESS_KEY_ID") ||
+      raise "environment variable AWS_ACCESS_KEY_ID is missing (required for SES in prod)"
+
+  aws_secret_access_key =
+    System.get_env("AWS_SECRET_ACCESS_KEY") ||
+      raise "environment variable AWS_SECRET_ACCESS_KEY is missing (required for SES in prod)"
+
+  aws_region = System.get_env("AWS_REGION") || "us-east-1"
+
+  config :ex_aws,
+    access_key_id: aws_access_key_id,
+    secret_access_key: aws_secret_access_key,
+    region: aws_region
+
+  config :salvorion, Salvorion.Mailer, adapter: Swoosh.Adapters.AmazonSES, region: aws_region
 end

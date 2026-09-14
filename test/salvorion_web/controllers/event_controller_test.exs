@@ -1,5 +1,5 @@
 defmodule SalvorionWeb.EventControllerTest do
-  use SalvorionWeb.ConnCase, async: true
+  use SalvorionWeb.ConnCase, async: false
 
   import Salvorion.AccountsFixtures
   import Salvorion.RosterFixtures
@@ -92,7 +92,9 @@ defmodule SalvorionWeb.EventControllerTest do
 
       {:ok, scheduled} =
         Activations.schedule_activation(
-          %{activation_type: "drill", started_at: DateTime.utc_now()}, actor: officer)
+          %{activation_type: "drill", started_at: DateTime.utc_now()},
+          actor: officer
+        )
 
       person = person_fixture()
 

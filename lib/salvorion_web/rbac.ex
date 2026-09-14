@@ -188,6 +188,20 @@ defmodule SalvorionWeb.RBAC do
     {"GET", "/api/activations/:id/dashboard/unaccounted"} => [@admin, @osh, @viewer],
 
     # ---------------------------------------------------------------------
+    # Reporting (Task 11) — Document 10 §1 "Manage report recipients":
+    # Yes / Yes / No / No. Report access (list/download/regenerate) is
+    # not its own §1 row; extended to report_viewer for reads (their
+    # whole purpose per Document 05 §2.3) but not for regenerate, which
+    # is a write action alongside recipient management.
+    # ---------------------------------------------------------------------
+    {"POST", "/api/report-recipients"} => [@admin, @osh],
+    {"GET", "/api/report-recipients"} => [@admin, @osh],
+    {"PATCH", "/api/report-recipients/:id"} => [@admin, @osh],
+    {"GET", "/api/activations/:id/reports"} => [@admin, @osh, @viewer],
+    {"GET", "/api/activations/:id/reports/:run_id/download"} => [@admin, @osh, @viewer],
+    {"POST", "/api/activations/:id/reports/regenerate"} => [@admin, @osh],
+
+    # ---------------------------------------------------------------------
     # Placeholder for a later prompt — no route exists for this yet.
     # "View audit log": Yes / No / No / No (FR-AUD-03).
     # ---------------------------------------------------------------------
