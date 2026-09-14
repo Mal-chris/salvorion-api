@@ -4,7 +4,7 @@
 **Version:** 0.2 (Draft; revised 11 September 2026 per Document 13)
 **Date:** 8 September 2026
 **Prepared by:** Malik Christopher
-**Status:** Confirmed, with section 1 superseded by Document 04. Sections 2, 3, 5, 7, 8 and 9 were rewritten on 11 September to reflect Phoenix, PowerSync and Bloc; the NestJS/Prisma/Riverpod originals are recorded in the project history only.
+**Status:** Confirmed, with section 1 superseded by Document 04. Sections 2, 3, 5, 7, 8 and 9 were rewritten on 11 September to reflect Phoenix, PowerSync and Bloc; the NestJS/Prisma/Riverpod originals are recorded in the project history only. Revised again 14 September 2026 (Document 27): "sync rules" corrected to Sync Streams throughout, §2.2's roster provider names updated to their actual module names, §7.1 added mapping this document's item numbers to the prompt numbers that actually built them, and §5's `id_barcode_parser`/`offline_login_grace_hours` rows corrected to state plainly that both are reserved keys, not yet consulted by any code path (finding 7.4).
 
 This document fixes the decisions that everything downstream depends on: the technology stack, the architecture, the domain model, the feature scope by release, and the order in which development will proceed. It is written so that development can begin on synthetic data while OSH feedback is pending, without needing to redesign later.
 
@@ -68,19 +68,20 @@ salvorion-client/     Flutter app, mobile + web (Windows: C:\Users\malch\salvori
 - The server accepts events **idempotently** (the UUID is the key), so retries after a dropped connection never duplicate.
 - Because records are events rather than mutable rows, most "conflicts" disappear: two wardens marking the same person present is two events, and the server derives the person's current status from the latest event by server-received time, with the full history kept for audit.
 - The one real conflict, contradictory statuses for the same person (present from a scan, absent from a roll call), is resolved by a deterministic rule: a physical scan outranks a roll-call absence, and the dashboard flags the contradiction for the warden to confirm.
-- The client's local copy of the roster, locations, active activation and current statuses is kept current by **PowerSync replication** under per-user sync rules, so a warden joining late still has the full picture; no hand-built snapshot endpoint is needed.
+- The client's local copy of the roster, locations, active activation and current statuses is kept current by **PowerSync replication** under per-user **Sync Streams** (PowerSync's current mechanism, confirmed against its own documentation in Prompt 10 — not the legacy bucket-based "Sync Rules" format this document originally assumed before that prompt ran; see `docs/DECISIONS.md`, "PowerSync sync config (Prompt 10): Sync Streams, not Sync Rules"), so a warden joining late still has the full picture; no hand-built snapshot endpoint is needed.
 
 ### 2.2 Roster integration layer
 
-A `RosterProvider` interface with three implementations, selected by configuration:
+A `Salvorion.Roster.Provider` behaviour (implemented as an Elixir behaviour, not an interface in the OOP sense — this section originally named it before implementation settled the actual module names) with, per Release 1, two real implementations plus two Release-2 placeholders, selected by configuration:
 
 | Provider | Use |
 |----------|-----|
-| `FileImportProvider` | CSV or Excel upload through the admin UI. Interim path and the one most likely to be used first. |
-| `ScheduledExportProvider` | Picks up a file UNISS drops on SFTP or shared storage on a schedule. |
-| `DirectDatabaseProvider` | Read-only connection to a UNISS-provided view. Last resort, only with their agreement. |
+| `Salvorion.Roster.Providers.FileImport` | CSV upload through the admin UI (Prompt 4). Interim path and the one actually built and used first; Excel is not implemented (docs/DECISIONS.md/Document 25, finding 3.5). |
+| `Salvorion.Roster.Providers.Synthetic` | Generates a realistic campus for development, testing, the drill simulator and demonstrations (Prompt 4). |
+| `ScheduledExportProvider` (Release 2, not yet built) | Picks up a file UNISS drops on SFTP or shared storage on a schedule; module name still proposed, not fixed, since nothing has implemented it yet. |
+| `DirectDatabaseProvider` (Release 2, not yet built) | Read-only connection to a UNISS-provided view. Last resort, only with their agreement; module name likewise still proposed. |
 
-Plus a `SyntheticRosterProvider` that generates a realistic campus (departments, faculties, buildings, thousands of people, plausible ID numbers) for development, testing, the drill simulator and demonstrations. Every provider maps to the same internal `RosterRecord` shape, so the rest of the system never knows where the data came from.
+Every provider implements the same `fetch_records/1` callback and produces the same `Salvorion.Roster.Provider.raw_record()` shape (this section originally called it `RosterRecord`, before implementation settled on a plain typed map rather than a struct), so the rest of the system never knows where the data came from.
 
 ---
 
@@ -153,11 +154,11 @@ Nothing that OSH has not yet decided is hardcoded. Each is a configurable settin
 | Student accountability rule | `Setting: student_accountability_rule` with values `all_enrolled`, `signed_in_only` (Release 1 default), `timetable_expected` (Release 2). `ExpectedPresence` is computed by the rule in effect at activation start. |
 | Student grouping | Faculty and programme both stored; dashboard grouping is a selector |
 | Warden devices | Any device; a shared-tablet mode allows one device to act for multiple wardens with per-entry attribution |
-| ID barcode format | `Setting: id_barcode_parser` maps raw scan payload to `Person.id_number`; initial parser is "payload is the ID number" |
+| ID barcode format | `Setting: id_barcode_parser` — **reserved key** (Document 25, finding 7.4): the key is defined and documented, but no code path consults it yet, since scan-to-`Person.id_number` resolution in Release 1 has exactly one, hardcoded behaviour ("payload is the ID number," `Roster.get_person_by_id_number/1`); the setting exists so a future, non-trivial parser (e.g. extracting an ID number from a structured QR payload) can be selected without a code change, once one is actually built |
 | Assembly point mapping | Seed data from the OSH guide, editable in admin |
 | Warden list | `WardenAssignment` records, importable |
 | Retention | `Setting: visitor_retention_days` (default 90) enforced by a nightly Oban job |
-| Offline login grace period | `Setting: offline_login_grace_hours` (FR-USR-04) |
+| Offline login grace period | `Setting: offline_login_grace_hours` (FR-USR-04) — **reserved key** (Document 25, finding 7.4): documented as part of the design, not yet consulted by any code path, since the mobile app itself (Stage C) hasn't been built; see Document 10 §4 for the intended behaviour once it is |
 | Report format | HTML template in `priv/report_templates`, rendered by Gotenberg, editable without code changes to the API |
 | Zones 7, 11, 12, 13 populations | Areas seeded; whether their people are in the roster is a roster question, not a system change |
 
@@ -195,7 +196,7 @@ Each numbered item becomes one or more VS Code prompts, each self-contained with
 9. Sign-in and accountability events: idempotent ingest endpoint, status derivation, contradiction rule
 10. Visitors module with QR issuance and retention job
 11. Roll-call module and warden assignments
-12. PowerSync sync rules against the Ecto schema; the write endpoints the client connector uploads through
+12. PowerSync Sync Streams against the Ecto schema; the write endpoints the client connector uploads through
 13. Dashboard aggregation queries and Phoenix Channels for out-of-band pushes
 14. Reporting context: HTML template, Gotenberg render job, recipients, SES mailer, delivery tracking, closed-to-reported transition
 15. OpenAPI generation (open_api_spex) and Dart client generation
@@ -217,6 +218,29 @@ Each numbered item becomes one or more VS Code prompts, each self-contained with
 27. End-to-end tests, accessibility pass
 28. Deployment: Dockerfiles, environment configuration, hosting, backups, runbook
 29. Pilot preparation: real roster connection, data protection checklist, warden training materials
+
+### 7.1 Item numbers here versus actual prompt numbers (added per Document 27)
+
+The numbered items above and the actual VS Code prompt numbers referenced throughout `docs/DECISIONS.md` and documents 12–24 have never lined up one-to-one — items were split across two prompts, reordered relative to each other, or folded into a neighbouring prompt with no dedicated item of their own. Document 25's consistency audit found every later document assumes a reader can make this translation unaided; this table is that translation.
+
+| §7 item | What it describes | Actual prompt(s) | Prompt document |
+|---|---|---|---|
+| Stage A, 1 | Backend repo, Phoenix scaffold, Docker Compose, CI skeleton | Prompt 1 | 12 |
+| Stage A, 2 | Configuration, health check, logging/error-handling conventions, Oban setup | No standalone prompt — folded into Prompts 1 and 2 | 12, 14 |
+| Stage A, 3 | Ecto migrations and schemas for the full domain model | Prompt 2 | 14 |
+| Stage A, 4 | Synthetic roster provider and OSH assembly point seed data | Split: OSH seed data → Prompt 3; synthetic provider → Prompt 4 | 15, 16 |
+| Stage A, 5 | Accounts context (Guardian, JWKS, roles, auth plug) and Audit context | Prompt 2 | 14 |
+| Stage B, 6 | Organisation and Locations modules | Prompt 3 | 15 |
+| Stage B, 7 | Roster module | Prompt 4 | 16 |
+| Stage B, 8 | Activations module with state machine | Prompt 5 | 17 |
+| Stage B, 9 | Sign-in and accountability events | Prompt 6 | 18 |
+| Stage B, 10 | Visitors module | Prompt 8 — built *after* item 11, not before | 20 |
+| Stage B, 11 | Roll-call module and warden assignments | Prompt 7 — built *before* item 10, alongside dashboard aggregation (item 13's other half) | 19 |
+| Stage B, 12 | PowerSync Sync Streams against the schema; write endpoints | Prompt 10 | 22 |
+| Stage B, 13 | Dashboard aggregation queries and Phoenix Channels | Split: dashboard aggregation → Prompt 7 (with item 11); Channels → Prompt 12, built *last*, after Reporting, not before it | 19, 24 |
+| Stage B, 14 | Reporting context | Prompt 11 | 23 |
+| Stage B, 15 | OpenAPI generation and Dart client generation | Not started as of Stage B's completion (Document 25) | — |
+| *(no §7 item at all)* | HTTP routes/controllers consolidating every context built by items 6–11 into `lib/salvorion_web` | Prompt 9 | 21 |
 
 ---
 

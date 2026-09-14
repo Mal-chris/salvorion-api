@@ -4,7 +4,7 @@
 **Version:** 0.2 (Draft; revised 11 September 2026 per Document 13)
 **Date:** 8 September 2026
 **Prepared by:** Malik Christopher
-**Status:** For review before Stage A development begins
+**Status:** For review before Stage A development begins. Revised 14 September 2026 (Document 27, closing Document 25's findings 4.1, 4.3–4.6): Sync Rules renamed Sync Streams; the Channels component and container-diagram prose corrected to name its actual three push types and clarify the contradiction flag returns via the HTTP response, not a Channel; the report-generation enqueue redrawn from the API layer, not Activations→Reporting; the Settings-reading arrows corrected (Accountability reads the student rule, Roster reads the retention period) and the missing Activations→Accountability and →Channels arrows added; "fire-and-forget" corrected to same-transaction.
 
 This document uses the C4 model: Context, Container, Component, and (where useful) Code. Each level zooms in on the previous one. All diagrams are Mermaid, so they render in VS Code (with the Mermaid Preview extension), GitHub, and most documentation tooling.
 
@@ -58,7 +58,7 @@ C4Container
         Container(flutter_mobile, "Warden Mobile App", "Flutter (Android/iOS)", "Sign-in, visitor registration, roll calls. Works offline via local SQLite.")
         Container(flutter_web, "Web Dashboard & Admin", "Flutter Web", "Live dashboard, administration, reporting UI")
         Container(phoenix_api, "Phoenix API", "Elixir / Phoenix", "Business logic, validation, auth, activation state machine, WebSocket channels")
-        Container(powersync, "PowerSync Service", "Self-hosted (Docker)", "Replicates Postgres to client-embedded SQLite; enforces per-user sync rules")
+        Container(powersync, "PowerSync Service", "Self-hosted (Docker)", "Replicates Postgres to client-embedded SQLite; enforces per-user Sync Streams")
         ContainerDb(postgres, "PostgreSQL", "Relational database", "Single source of truth for all data")
         Container(pdf_service, "PDF Render Service", "Gotenberg (containerised Chromium)", "Renders the HTML report template to PDF, isolated from the main API")
         Container(oban, "Background Jobs", "Oban (runs inside Phoenix, Postgres-backed)", "Report generation trigger, email delivery, roster refresh, visitor purge")
@@ -88,7 +88,7 @@ C4Container
 **Reading this diagram, and why it looks the way it does:**
 
 - **Two client containers, one Flutter codebase.** The Warden Mobile App and the Web Dashboard are drawn separately because they serve different users with different UI, but they are built and shipped from the same Flutter project (see the Final Technology Stack, section 3, for why a separate SvelteKit dashboard was ruled out).
-- **Reads and writes take different paths, and both clients read the same way.** This is the single most important structural decision in the whole system. *Reads* (the roster, current statuses, the dashboard feed) come from PowerSync's replicated local SQLite database on every client, mobile and web alike, so the dashboard and the warden's list are driven by the same replication stream. *Writes* (a sign-in, a roll-call mark) are recorded locally and placed in PowerSync's upload queue, which is the offline outbox; the client's PowerSync connector uploads each queued write to the Phoenix API, where it is validated, turned into an `AccountabilityEvent` row, and committed. The client-generated `client_uuid` travels with the write so a retry after a dropped connection is idempotent. Phoenix Channels are used only for out-of-band pushes that are not row replication, such as the contradiction flag returned to a warden.
+- **Reads and writes take different paths, and both clients read the same way.** This is the single most important structural decision in the whole system. *Reads* (the roster, current statuses, the dashboard feed) come from PowerSync's replicated local SQLite database on every client, mobile and web alike, so the dashboard and the warden's list are driven by the same replication stream. *Writes* (a sign-in, a roll-call mark) are recorded locally and placed in PowerSync's upload queue, which is the offline outbox; the client's PowerSync connector uploads each queued write to the Phoenix API, where it is validated, turned into an `AccountabilityEvent` row, and committed. The client-generated `client_uuid` travels with the write so a retry after a dropped connection is idempotent. Phoenix Channels are used only for out-of-band pushes that are not row replication — a lightweight nudge telling a client to go re-fetch, never the data itself (Prompt 12): `person_status_updated` (a scoped nudge that something changed for this activation), `activation_changed` (unscoped — start/close/reported), and `session_revoked` (a device or user cut off mid-connection). The contradiction flag itself is *not* one of these — it returns synchronously in the HTTP response to the ingest request that created the contradiction, which is how the warden who caused it learns immediately; other wardens learn about it through the ordinary PowerSync-replicated `person_statuses.contradicting_event_id` column, not a Channel push.
 - **The PDF renderer is its own container**, not code running inside Phoenix, specifically because of the memory and image-size cost discussed earlier. Oban calls it over HTTP the same way it would call any external service, so a spike in report-rendering memory never touches the process serving live API traffic.
 - **Oban and the job queue live inside Postgres**, not in a separate Redis container. This is what "dropping Redis" (Technology Stack document, section 2) looks like at the container level: one fewer box to deploy, back up and monitor.
 
@@ -112,14 +112,14 @@ C4Component
         Component(reporting_ctx, "Reporting", "Elixir context", "Report generation orchestration, recipients, delivery tracking")
         Component(audit_ctx, "Audit", "Elixir context", "Immutable audit log writer, queried by admins")
         Component(settings_ctx, "Settings", "Elixir context", "Key/value configuration, e.g. student accountability rule")
-        Component(channels, "Phoenix Channels", "Real-time layer", "Out-of-band pushes to clients, e.g. contradiction flags; not used for row replication")
+        Component(channels, "Phoenix Channels", "Real-time layer", "Out-of-band pushes to clients: person_status_updated, activation_changed, session_revoked; not used for row replication and not how a contradiction flag reaches the warden who caused it (that returns in the ingest HTTP response)")
         Component(jwks, "JWKS endpoint", "Phoenix", "Publishes the public signing key PowerSync uses to verify client tokens")
         Component(web_router, "Router & Controllers", "Phoenix", "HTTP endpoints, request validation, OpenAPI generation")
     }
 
     ContainerDb(postgres, "PostgreSQL")
     Container_Boundary(powersync_boundary, "PowerSync Service") {
-        Component(sync_rules, "Sync Rules", "PowerSync configuration file", "Defines which rows each authenticated user's device may read")
+        Component(sync_rules, "Sync Streams", "PowerSync configuration file (edition 3)", "Defines which rows each authenticated user's device may read")
     }
     Container(oban, "Oban")
 
@@ -127,13 +127,17 @@ C4Component
     Rel(web_router, accountability_ctx, "Routes sign-in/roll-call writes to")
     Rel(web_router, activation_ctx, "Routes activation start/close to")
     Rel(web_router, roster_ctx, "Routes roster import to")
+    Rel(web_router, oban, "Enqueues GenerateReportWorker immediately after a successful close via", "Oban job")
+    Rel(web_router, settings_ctx, "Routes GET/PATCH /api/settings to")
 
     Rel(accountability_ctx, activation_ctx, "Reads active/expected state from")
+    Rel(activation_ctx, accountability_ctx, "Triggers ExpectedPresence computation on start via")
     Rel(accountability_ctx, roster_ctx, "Resolves person records via")
-    Rel(accountability_ctx, channels, "Broadcasts PersonStatus updates via")
-    Rel(activation_ctx, reporting_ctx, "Triggers report generation on close via", "Oban job")
+    Rel(accountability_ctx, channels, "Broadcasts person_status_updated via")
+    Rel(activation_ctx, channels, "Broadcasts activation_changed via")
     Rel(reporting_ctx, oban, "Enqueues render + email jobs in")
-    Rel(roster_ctx, settings_ctx, "Reads student_accountability_rule from")
+    Rel(accountability_ctx, settings_ctx, "Reads student_accountability_rule from")
+    Rel(roster_ctx, settings_ctx, "Reads visitor_retention_days from")
 
     Rel(auth_ctx, postgres, "Persists via Ecto")
     Rel(org_ctx, postgres, "Persists via Ecto")
@@ -149,7 +153,7 @@ C4Component
     Rel(sync_rules, jwks, "Verifies client tokens against")
 ```
 
-**Reading this diagram:** The sync rules are drawn inside the PowerSync service, not the Phoenix API, because they are a configuration file PowerSync reads, not Elixir code; do not look for them under `lib/`. Each remaining box under "Phoenix API" corresponds directly to a `lib/salvorion/<context>` folder, which is exactly the folder structure already generated in the Ecto schema package (document 06). This is deliberate: the architecture diagram and the actual code layout are the same shape, so there is no translation step between "what the diagram says" and "what file I open." The `Audit` context has no incoming write relationships drawn from other contexts individually only because every context calls it the same way (fire-and-forget on every mutation); that pattern will be enforced with a shared `Salvorion.Audit.record/1` helper rather than drawn as ten separate arrows.
+**Reading this diagram:** The Sync Streams are drawn inside the PowerSync service, not the Phoenix API, because they are a configuration file PowerSync reads, not Elixir code; do not look for them under `lib/`. Each remaining box under "Phoenix API" corresponds directly to a `lib/salvorion/<context>` folder, which is exactly the folder structure already generated in the Ecto schema package (document 06). This is deliberate: the architecture diagram and the actual code layout are the same shape, so there is no translation step between "what the diagram says" and "what file I open." The `Audit` context has no incoming write relationships drawn from other contexts individually only because every context calls it the same way — **in the same database transaction as the change it describes**, not fire-and-forget, so an audit row can never exist for a write that then rolled back, or be missing for one that committed (see `Salvorion.Audit.Multi`) — that pattern is enforced with a shared helper rather than drawn as ten separate arrows. Note also: `activation_ctx` enqueuing the report-generation job is deliberately **not** drawn as `activation_ctx → reporting_ctx` — `Salvorion.Activations` has no dependency on `Salvorion.Reporting` at all (the dependency arrow already runs the other way: `reporting_ctx → activation_ctx`, since Reporting needs `get_activation!/1` and `mark_activation_reported/1`). The enqueue happens in `web_router` (`SalvorionWeb.ActivationController.close/2`), immediately after `Activations.close_activation/2` reports success — an API-layer action, not an Activations-context one; see `docs/DECISIONS.md`, "Reporting (Prompt 11): closing an activation must itself enqueue `GenerateReportWorker`."
 
 ---
 

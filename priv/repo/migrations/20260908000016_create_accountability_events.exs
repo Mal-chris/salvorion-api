@@ -10,7 +10,7 @@ defmodule Salvorion.Repo.Migrations.CreateAccountabilityEvents do
         null: false
 
       add :person_id, references(:people, type: :binary_id, on_delete: :restrict), null: false
-      # scanned | manual | roll_call | visitor_registered
+      # scanned | manual | roll_call | visitor_registered | override | contradiction_resolved
       add :kind, :string, null: false
       # present | absent | excused
       add :status, :string, null: false

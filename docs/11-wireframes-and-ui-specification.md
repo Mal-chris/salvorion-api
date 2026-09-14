@@ -4,7 +4,7 @@
 **Version:** 0.2 (Draft; revised 11 September 2026 per Document 13)
 **Date:** 8 September 2026
 **Prepared by:** Malik Christopher
-**Status:** For review. Three key screens were also rendered as visual mockups in-conversation for immediate feedback; this document is the durable, complete specification covering every screen, including ones not mocked up visually.
+**Status:** For review. Three key screens were also rendered as visual mockups in-conversation for immediate feedback; this document is the durable, complete specification covering every screen, including ones not mocked up visually. Revised 14 September 2026 (closing Document 25's findings 6.4, 6.5, 6.6): the roll-call "Present" group renamed "Accounted" to match the API's actual grouping (which includes present, absent and excused, not present-only), the contradiction "confirm" action corrected to describe ingesting a `contradiction_resolved` event rather than a direct column write, "Mark zone complete" marked explicitly as not yet implemented, and the dashboard's unaccounted-row "last known status source" field corrected — it is always nil by definition for a genuinely unaccounted person.
 
 ---
 
@@ -38,10 +38,10 @@
 
 ### 1.5 Roll call
 
-- Grouped list: Unaccounted (top, most urgent), Flagged/contradictions (FR-ROLL-05), Present (collapsed by default, since they need no action)
+- Grouped list: Unaccounted (top, most urgent), Flagged/contradictions (FR-ROLL-05), **Accounted** (collapsed by default, since they need no action — corrected from an earlier draft's "Present": the actual API group (`Accountability.list_roll_call/2`'s `accounted` list) contains everyone with status `present`, `absent`, *or* `excused`, not present-only people; "Accounted" is the name that actually matches what the group contains)
 - Each unaccounted row: name, usual area, two actions (Present / Absent), with an optional note field reachable by long-press or a small icon, not a separate screen (keeping the primary action fast, per NFR-USE-01's ten-minute target)
-- Flagged rows are visually distinct (warning colour, not danger colour, since a contradiction needs review, not alarm) and carry a single "confirm" action that accepts the scan's status (this sets `contradiction_resolved_at` on the person's status record)
-- Footer action: "Mark zone complete," which does not lock the list (a warden can return and adjust) but signals to OSH that this zone's warden considers their review finished
+- Flagged rows are visually distinct (warning colour, not danger colour, since a contradiction needs review, not alarm) and carry a single "confirm" action that accepts the scan's status — this **ingests a `contradiction_resolved` event** through the same path as any other accountability event, not a direct write; `contradiction_resolved_at` is then a derived field, computed from that event (corrected from an earlier draft that described this as directly setting the column; see Document 06 and `docs/DECISIONS.md`, "Accountability core (Prompt 6): contradiction resolution is an event")
+- Footer action: "Mark zone complete" — **not yet implemented** (Document 25, finding 6.4): no route, event kind, or field exists anywhere in the backend for a warden to signal this. This remains a reasonable aspiration for a later Stage C screen, described here as a design intent, not as something the API already supports; do not build a client screen assuming a backend endpoint for it exists yet.
 
 ### 1.6 Offline indicator (persistent, not a separate screen)
 
@@ -61,7 +61,7 @@
 - Header: activation name/description, start time, activation type badge
 - Two headline metric cards: total signed in, total unaccounted
 - Participation-by-faculty (or department, toggle between the two) as horizontal progress bars, colour-coded by threshold (comfortably above target, borderline, concerning) rather than a single flat colour, so a glance tells OSH where to look first
-- Unaccounted list, grouped and filterable by zone, department or faculty (FR-DASH-03), each row showing name, usual area, and last known status source
+- Unaccounted list, grouped and filterable by zone, department or faculty (FR-DASH-03), each row showing name and usual area — **not** a "last known status source" (corrected from an earlier draft, Document 25 finding 6.6): a row appears on this list precisely *because* no status-determining event exists for that person in this activation, so there is nothing to show as a source; the field this earlier draft described is always nil for a genuinely unaccounted person by definition, not merely blank pending data
 - All figures update live without a manual refresh (FR-DASH-05)
 
 ### 2.2 Activation control (start/close)

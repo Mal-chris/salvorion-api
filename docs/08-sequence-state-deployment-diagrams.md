@@ -4,7 +4,7 @@
 **Version:** 0.2 (Draft; revised 11 September 2026 per Document 13)
 **Date:** 8 September 2026
 **Prepared by:** Malik Christopher
-**Status:** For review. Completes the diagram set promised at the end of Document 07.
+**Status:** For review. Completes the diagram set promised at the end of Document 07. Revised 14 September 2026 (Document 27, closing Document 25's findings 4.1, 4.7–4.12): every route corrected to its actual current path; §1 redrawn so the warden's confirmation fires from local state immediately, matching §2, rather than waiting on the API round-trip; a Phoenix Channels nudge added to §1; §3 redrawn to show contradiction resolution as an ingested event, not a direct column write; §4 redrawn so the `ReportRun` is created `pending` before rendering, and its Gotenberg call corrected to the real route; §5's "closed" note corrected to describe the actual 5-minute field-event window and unlimited-time review actions, instead of "no new events accepted at all."
 
 All diagrams are Mermaid, rendering in VS Code (Mermaid Preview extension), GitHub, and any Mermaid-compatible viewer.
 
@@ -21,24 +21,27 @@ sequenceDiagram
     participant API as Phoenix API
     participant DB as PostgreSQL
     participant PS as PowerSync
+    participant Ch as Phoenix Channel
     participant Web as Web Dashboard
 
     W->>App: Scans ID card
     App->>App: mobile_scanner decodes barcode
     App->>App: Generate client_uuid, capture client_timestamp
     App->>App: Record event locally; PowerSync upload queue drains immediately (online)
-    App->>API: Connector POSTs /accountability_events (client_uuid, person lookup key, activation_id, ...)
+    App-->>W: Confirmation beep + green check (optimistic, from local state — same as offline, Section 2)
+    App->>API: Connector POSTs /api/activations/:id/events (client_uuid, person lookup key, activation_id, ...)
     API->>DB: Resolve person by id_number
     API->>DB: Insert AccountabilityEvent (kind: scanned, server_timestamp = now)
     API->>DB: Upsert PersonStatus (activation_id, person_id, status: present, source_event_id)
     API-->>App: 201 Created
-    App-->>W: Confirmation beep + green check
+    API->>Ch: Broadcast person_status_updated (a nudge, not the row itself — Prompt 12)
+    Ch-->>Web: Push received (a joined admin/osh_officer/report_viewer/in-scope-warden socket)
     DB-->>PS: Logical replication picks up the change
-    PS-->>Web: Reactive query updates dashboard
+    PS-->>Web: Reactive query updates dashboard with the actual data
     Web-->>Web: Participation rate and unaccounted list re-render
 ```
 
-**What to notice:** the confirmation to the warden (the beep and green check) comes back from the direct API call, not from PowerSync. The dashboard update is a separate, slightly slower path through replication. This is intentional: the person standing at the scanner needs instant feedback regardless of how fast the dashboard happens to refresh.
+**What to notice:** the confirmation to the warden (the beep and green check) comes from **local state**, the instant the event is recorded on the device — never from the API round-trip, online or offline alike (this section previously showed it waiting on the API's `201`, which contradicted Section 2's own, correct description of the same principle; the two are now consistent). The Channel push and the PowerSync replication are two independent, parallel paths to the *dashboard's* update, not to the warden's own confirmation: the Channel push is a lightweight signal telling an already-connected client "something changed, go look," and PowerSync's reactive query is what actually supplies the new data once replication catches up — the Channel never carries the row itself (Document 07, section 2). The person standing at the scanner needs instant feedback regardless of how fast any of this happens.
 
 ---
 
@@ -62,7 +65,7 @@ sequenceDiagram
     W->>App: Continues scanning; more events queue locally
     Note over PS: Connectivity returns; PowerSync resumes uploading
     loop For each queued write, in order, via the connector's uploadData
-        PS->>API: POST /accountability_events (same client_uuid as originally generated)
+        PS->>API: POST /api/activations/:id/events (same client_uuid as originally generated)
         API->>DB: Insert if client_uuid not already present (idempotent)
         API-->>PS: 201 Created (or 200 if already existed)
         PS->>PS: Remove write from upload queue
@@ -94,15 +97,22 @@ sequenceDiagram
     Wb->>API: Roll-call event (kind: roll_call, status: absent)
     API->>DB: Insert event (always inserted; events are never rejected)
     API->>DB: Check existing PersonStatus for this person/activation
-    DB-->>API: Existing status is "present", sourced from a scanned event
-    API->>API: Apply contradiction rule: scanned outranks roll_call
+    DB-->>API: Existing status is "present", sourced from a sign-in-kind event
+    API->>API: Apply contradiction rule: any sign-in (scanned/manual/visitor_registered) outranks roll_call
     API->>DB: PersonStatus remains "present"; set contradicting_event_id = the roll-call event
     API-->>Wb: Response includes the contradiction flag
     Note over Wb: PersonStatus (with contradicting_event_id) also replicates to Warden B via PowerSync
-    Wb->>Wb: App highlights the person as "flagged: scan says present"
+
+    Note over Wb: Later, Wb reviews the flagged row and confirms it
+    Wb->>API: Confirm contradiction (POST .../resolve-contradiction)
+    API->>API: Ingest a contradiction_resolved event through the same ingest_event/2 path as any other event — same idempotency, same audit row
+    API->>DB: Insert contradiction_resolved event (status unaffected; the event itself never changes "present")
+    API->>DB: Re-derive PersonStatus: contradiction_resolved_at = this event's server_timestamp
+    API-->>Wb: Confirmation
+    Note over Wb: contradiction_resolved_at (like everything else on PersonStatus) is a pure function of the event log — deleting and rebuilding the row reproduces it exactly
 ```
 
-**What to notice:** the flag is a real column, `person_statuses.contradicting_event_id`, cleared by setting `contradiction_resolved_at` when the warden confirms (FR-ROLL-05; Document 06). Both events are always stored. Nothing is ever rejected or silently dropped, since the event log is the audit trail and every action a warden takes must be recoverable later. What changes is only the *derived* `PersonStatus`, and the losing event's kind is surfaced back to the warden as a flag rather than hidden, so a human resolves the ambiguity rather than the system quietly picking a side without anyone noticing.
+**What to notice:** the flag is a real column, `person_statuses.contradicting_event_id` (FR-ROLL-05; Document 06). Both the original sign-in and roll-call events are always stored, and so is the confirmation: it is **not** a direct write to `contradiction_resolved_at`, but its own `AccountabilityEvent` of kind `contradiction_resolved`, ingested exactly like a scan or a roll-call mark. Nothing is ever rejected or silently dropped, since the event log is the audit trail and every action a warden takes must be recoverable later — including confirming a contradiction. What changes on write is only the *derived* `PersonStatus`, and the losing event's kind is surfaced back to the warden as a flag rather than hidden, so a human resolves the ambiguity rather than the system quietly picking a side without anyone noticing. See `docs/DECISIONS.md`, "Accountability core (Prompt 6): contradiction resolution is an event, so I4 holds fully," for why this matters: because it's an event, a later `roll_call: absent` for the same person correctly reopens the contradiction, and rebuilding `PersonStatus` from scratch never loses the resolution.
 
 ---
 
@@ -115,24 +125,25 @@ sequenceDiagram
     participant API as Phoenix API
     participant Activations as Activations Context
     participant Oban as Oban (job queue)
-    participant PDF as PDF Render Service
+    participant PDF as PDF Render Service (Gotenberg)
     participant SES as Amazon SES
     actor R as Report Recipient
 
     O->>Web: Clicks "Close Activation"
-    Web->>API: PATCH /activations/:id (close)
+    Web->>API: PATCH /api/activations/:id/close
     API->>Activations: close_changeset/2
     Activations->>Activations: Validate status was "active"
     Activations-->>API: Activation now "closed"
-    API->>Oban: Enqueue GenerateReportJob(activation_id)
+    API->>Oban: Enqueue GenerateReportWorker(activation_id) — an API-layer action, not Activations calling Reporting (Document 07)
     API-->>Web: 200 OK, activation closed
 
-    Oban->>Oban: Picks up GenerateReportJob
+    Oban->>Oban: GenerateReportWorker picks up the job
+    Oban->>Oban: Create ReportRun (status: pending) — before rendering starts, not after
     Oban->>API: Compile report data (participation rates, unaccounted list, manual sign-ins)
-    Oban->>PDF: POST /render (HTML report template + data)
+    Oban->>PDF: POST /forms/chromium/convert/html (multipart, HTML template + data as index.html)
     PDF-->>Oban: PDF bytes
-    Oban->>Oban: Store ReportRun (pdf_path, status: generated)
-    Oban->>Oban: Enqueue DeliverReportJob per active ReportRecipient
+    Oban->>Oban: Update the same ReportRun (pdf_path, status: generated)
+    Oban->>Oban: Create a pending ReportDelivery row and enqueue DeliverReportWorker per active ReportRecipient
 
     loop For each active recipient
         Oban->>SES: Send email with PDF attached
@@ -141,10 +152,10 @@ sequenceDiagram
     end
 
     SES-->>R: Report email arrives
-    Oban->>Activations: mark_reported_changeset/1 (closed -> reported)
+    Oban->>Activations: mark_reported_changeset/1 (closed -> reported), once every delivery is terminal
 ```
 
-**What to notice:** report generation is entirely decoupled from the request that closes the activation. The OSH Officer's click returns immediately once the activation is marked closed; everything from PDF rendering onward happens in the background via Oban, which is what keeps the heavier PDF-rendering work (see the Technology Stack document's note on Puppeteer/Gotenberg's memory footprint) from ever blocking a user-facing request.
+**What to notice:** report generation is entirely decoupled from the request that closes the activation. The OSH Officer's click returns immediately once the activation is marked closed; everything from PDF rendering onward happens in the background via Oban, which is what keeps the heavier PDF-rendering work (see the Technology Stack document's note on Gotenberg's memory footprint) from ever blocking a user-facing request. The `ReportRun` row exists in a `pending` state from the moment the job starts, not only once a PDF has actually been produced — if `GenerateReportWorker` fails and Oban retries, the retry finds and continues the same `pending` run rather than creating a second, orphaned one (`Reporting.get_pending_report_run/1`). Worker names above are the real module names (`Salvorion.Reporting.Workers.GenerateReportWorker`/`DeliverReportWorker`); an earlier draft of this diagram called them `GenerateReportJob`/`DeliverReportJob`, names that were never actually used.
 
 ---
 
@@ -166,8 +177,18 @@ stateDiagram-v2
     end note
 
     note right of closed
-        No new AccountabilityEvents accepted
-        for this activation from this point on.
+        Not a hard cutoff. A field event (scanned,
+        manual, roll_call, visitor_registered) is
+        still accepted if its client_timestamp is
+        within 5 minutes of closed_at — an offline
+        device syncing shortly after close. A review
+        action (override, contradiction_resolved) is
+        accepted at any time after close, with no
+        window at all: reviewing the unaccounted list
+        is meant to happen after the roll call ends.
+        See docs/DECISIONS.md, "Accountability core
+        (Prompt 6): late events after an activation
+        closes."
     end note
 ```
 

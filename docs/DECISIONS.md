@@ -3,7 +3,7 @@
 Recorded during project scaffolding so they are not lost. Each section names
 the prompt that implemented it, or says it is pending.
 
-## Guardian must use an asymmetric signing key (RS256 or ES256)
+## Guardian must use an asymmetric signing key (RS256 or ES256) (Prompt 2)
 
 Do **not** use Guardian's default HS512 shared secret. PowerSync authenticates
 clients by verifying their JWT against a JWKS endpoint that Phoenix will expose
@@ -13,7 +13,7 @@ RSA or EC private key and the matching public key served from that endpoint.
 The PowerSync service config (`docker/powersync/powersync.yaml`) already points
 `client_auth.jwks_uri` at that URL via `POWERSYNC_JWKS_URL`.
 
-## Client offline outbox via PowerSync upload queue
+## Client offline outbox via PowerSync upload queue (pending, Stage C)
 
 The Flutter client uses PowerSync's upload queue as its offline outbox. The
 client's PowerSync connector POSTs queued writes to this API, including a
@@ -38,14 +38,22 @@ generation is ever automated or run concurrently.
 Per Document 10 (Security Design), section 1: the RBAC matrix lists "Start
 an activation" and "Close an activation" as **OSH Officer only** — the
 System Administrator column is blank for both rows. This is a different
-shape from the Locations, Organisation and Settings permissions built in
-Prompt 3, where OSH Officer and System Administrator are both permitted
-("Manage assembly points, zones, areas", "Change system settings", etc.
-are Yes/Yes). Whoever wires the RBAC route mapping for the Activations
-routes (a later prompt) must not default to "same access as everything
-else OSH Officer can do" — System Administrator does not get a pass on
-starting or closing an activation, even though it does on almost every
-other OSH-managed resource.
+shape from the Locations permissions built in Prompt 3 ("Manage assembly
+points, zones, areas": Yes/Yes) and the Settings permissions ("Change
+system settings": Yes/Yes — the `Setting` schema and context were built in
+Prompt 6, but the enforced RBAC row and its route date to Prompt 9's
+`SettingController`, per "a settings API route, closing finding 3.6" below),
+where OSH Officer and System Administrator are both permitted. **Correction:
+Organisation management is not part of this same-shape group** (an earlier
+draft of this entry lumped it in) — "Manage departments, faculties,
+programmes" is Yes/No/No/No, System-Administrator-only, which is its own
+asymmetry, not the Locations/Settings one. Whoever wires the RBAC route
+mapping for the Activations routes (a later prompt) must not default to
+"same access as everything else OSH Officer can do" — System Administrator
+does not get a pass on starting or closing an activation, even though it
+does on almost every other OSH-managed resource (Locations, Settings), and
+separately has no pass on Organisation management either, for the opposite
+reason: that one is the resource OSH Officer itself lacks write access to.
 
 ## Settings (Prompt 6): audit rows for settings carry the key in the payload
 
@@ -119,8 +127,15 @@ an activation is `closed` or `reported`. Both are still rejected on a
 An accepted late event of either class is stored and the person's status
 re-derived exactly as if it had arrived on time. If the activation is
 already `reported`, an additional audit row with action
-`"accountability.late_event_after_report"` is written for either class, so
-the Reporting context can offer a regenerate (FR-REP-05).
+`"accountability.late_event_after_report"` is written for either class —
+**as of Stage B's completion, this is a write-only signal**: nothing in
+`Salvorion.Reporting`, or anywhere else, currently reads this action back
+to surface a "this report may be stale" prompt or offer a regenerate.
+FR-REP-05's manual regenerate (`regenerate_report/2`, Prompt 11) exists and
+works, but an OSH Officer has to think to trigger it themselves — the audit
+row is only evidence, after the fact, that they should have. Wiring this
+row to an actual regenerate-offered-automatically flow remains a real gap,
+not yet closed.
 
 ## Accountability core (Prompt 6): contradiction resolution is an event, so I4 holds fully
 
@@ -231,8 +246,15 @@ Recorded per the prompt's explicit decisions, since the documents left room:
   `"(no department)"` bucket (via SQL `COALESCE`, not a real row) so totals
   still reconcile.
 - **Faculty attribution.** Staff via `primary_department.faculty_id`;
-  students via `programme.faculty_id`. Nil (which is every faculty in the
-  current dev data — Document 01, section 9) groups as `"(no faculty)"`.
+  students via `programme.faculty_id`. Nil (which is every real department's
+  `faculty_id` in the current dev data — **corrected citation**: Document 01
+  section 9 ("Assumptions") does not discuss faculties at all; the actual
+  source is Document 15 (Stage B, Prompt 3)'s department extraction rule,
+  "Create a Department record, with no faculty_id (faculties are not yet
+  known ...)" — Document 15 itself cites Document 01 §9 for that claim, but
+  that citation is also wrong there and was not in scope to fix in this
+  docs-only pass, which only touched Documents 03/04/06/07/08/09/10/11 and
+  this file) groups as `"(no faculty)"`.
   The query resolves this per-person with a `CASE WHEN type = 'staff'`
   expression, so it stays correct once faculties are actually assigned.
 - **Rates.** `participation_rate = present / expected`, over expected
@@ -318,19 +340,26 @@ unexpectedly large, not an oversight.
 ## HTTP layer (Prompt 9): the RBAC entries that don't come straight from Document 10 section 1
 
 Most of `SalvorionWeb.RBAC`'s new rows cite a section 1 row directly, cited
-in a comment next to the row itself. Four don't, or extend one beyond its
+in a comment next to the row itself. Five don't, or extend one beyond its
 literal reading, each recorded here as well since a reviewer scanning
 `docs/10-security-design.md` side-by-side with the matrix would otherwise
 wonder where they came from:
 
 - **`GET /api/faculties`/`/departments`/`/programmes`, `GET
-  /api/assembly-points`/`/zones`/`/areas`, `GET /api/people`.** Not a
-  section 1 row at all — section 1 only lists *write* permissions for these
-  resources ("Manage assembly points, zones, areas", "Manage departments,
-  faculties, programmes"); reading them is covered instead by section 2's
-  data classification table ("Directory information ... visible to any
+  /api/assembly-points`/`/zones`/`/areas`.** Not a section 1 row at all —
+  section 1 only lists *write* permissions for these resources ("Manage
+  assembly points, zones, areas", "Manage departments, faculties,
+  programmes"); reading them is covered instead by section 2's data
+  classification table ("Directory information ... visible to any
   authenticated user role in the course of their duties"). All reads here
-  are `@all_roles`.
+  are `@all_roles`, and always have been, since this prompt.
+- **`GET /api/people`, `GET /api/people/:id`, `GET /api/people/lookup`.**
+  Same section-2 reasoning applies, but this prompt's own rows were
+  narrower than that reasoning actually supports: `[@admin, @osh, @warden]`,
+  excluding `report_viewer` with no documented reason. Document 25/26's
+  Task 1 ("people-lookup routes widened to all four roles," below) closed
+  that gap after the fact — these three routes are `@all_roles` now, but
+  were not from this prompt onward until that later fix.
 - **`POST /api/faculties`/`/departments`/`/programmes`: admin only, not
   osh_officer.** The prompt that specified this route anticipated needing
   to *guess* this permission (asking me to fall back to Locations' shape
@@ -432,7 +461,7 @@ Task 3 asked for "whichever Phoenix templating already supports without adding a
 
 ## Reporting (Prompt 11): a concurrent double-`mark_activation_reported/1` is an accepted, low-probability race
 
-`Reporting.finish_run_if_complete/1` (called once per `DeliverReportWorker` job as it settles) can, if two of a run's deliveries finish at nearly the same moment under the `:reports` queue's concurrency of 2, both observe "zero deliveries still pending" and both call `Activations.mark_activation_reported/1`. The second call is a harmless no-op: `Activation.mark_reported_changeset/1` requires `status == "closed"` on the struct it's given, which is no longer true by the time the second call's changeset is built from a reload, so it returns a changeset error that `finish_run_if_complete/1` logs and discards rather than propagating. Not fixed with a lock, for the same reason the synthetic-roster-ID race (Prompt 4) and the visitor-pass-code collision handling (Prompt 8) weren't: a low-probability duplicate-audit-row outcome on a non-safety-critical path, not a correctness or data-loss risk.
+`Reporting.finish_run_if_complete/1` (called once per `DeliverReportWorker` job as it settles) can, if two of a run's deliveries finish at nearly the same moment under the `:reports` queue's concurrency of 2, both observe "zero deliveries still pending" and both call `Activations.mark_activation_reported/1`. The second call is a harmless no-op, but **not** by producing a logged, discarded changeset error as an earlier draft of this entry claimed: `Activation.mark_reported_changeset/1` requires `status == "closed"` on the struct it's given, which is no longer true by the time the second call reloads the activation, so the changeset already carries a validation error before `mark_activation_reported/1`'s `Multi.new() |> Multi.update(...) |> audit(...) |> run_audited(...)` chain ever reaches `Repo.update/1` — the whole `Multi` **fails outright and rolls back**, so no audit row is written for the second call. `finish_run_if_complete/1`'s own `case` on the result simply discards the `{:error, changeset}` — nothing is logged anywhere, at any level; the only trace this happened at all is the absence of a second `"activation.reported"` audit row where a careless reviewer might otherwise expect one. Not fixed with a lock, for the same reason the synthetic-roster-ID race (Prompt 4) and the visitor-pass-code collision handling (Prompt 8) weren't: a low-probability, silently-discarded duplicate call on a non-safety-critical path, not a correctness or data-loss risk.
 
 ## Reporting (Prompt 11): generated report storage is a Release 1 limitation, recorded for the deployment prompt
 
@@ -446,7 +475,7 @@ Task 6 asked for `Swoosh.Adapters.AmazonSES` in production only, guarded by `con
 
 Running the full suite after adding this prompt's tests, `activation_controller_test.exs` (pre-existing, unrelated to Reporting) intermittently failed with `Postgrex.Error ... query_canceled` inside `Activations.acquire_start_lock/1`. Cause: `start_activation/2` serialises every caller on one fixed Postgres advisory-lock key (`Activations`' own moduledoc explains why — campus-wide activations have no `activation_zones` rows for a partial unique index to key off), and this test file runs `async: true` despite calling `start_activation/2` in nearly every test — `ActivationsTest` itself is deliberately `async: false` for exactly this reason, but that reasoning was never applied to the controller test. This prompt's own new tests (several real-Gotenberg-HTTP-bound `async: false` tests, run serially) lengthened the full suite's wall-clock time enough to make the pre-existing race actually surface, which is why it looked at first like a Prompt 11 regression rather than a latent gap `activation_controller_test.exs` always had.
 
-Fixed the one file that actually failed (now `async: false`, matching `ActivationsTest`'s own precedent), and confirmed by rerunning the full suite. **Not swept further**: `event_controller_test.exs`, `visitor_controller_test.exs`, `accountability_reads_controllers_test.exs` and `roster_visitors_test.exs` all also call `start_activation/2` under `async: true` and share the same latent risk, but did not fail in this run and belong to earlier prompts outside Reporting's scope — recorded here so whoever next sees an unexplained `query_canceled` failure in one of them knows the cause immediately rather than re-diagnosing it, rather than "fixed" speculatively across files this prompt has no other reason to touch.
+Fixed the one file that actually failed (now `async: false`, matching `ActivationsTest`'s own precedent), and confirmed by rerunning the full suite. **Not swept further, at the time of this prompt**: `event_controller_test.exs`, `visitor_controller_test.exs`, `accountability_reads_controllers_test.exs` and `roster_visitors_test.exs` all also called `start_activation/2` under `async: true` and shared the same latent risk, but did not fail in this run and belonged to earlier prompts outside Reporting's scope — recorded here so whoever next saw an unexplained `query_canceled` failure in one of them would know the cause immediately rather than re-diagnosing it, rather than "fixed" speculatively across files this prompt had no other reason to touch. **Superseded:** by the time of the Document 25 consistency audit, all four of these files had independently become `async: false` (each acquired for its own reason — real HTTP/PII test additions in later prompts, not a deliberate sweep of this entry's list), so the latent risk this paragraph flagged no longer applies to any of them; confirmed directly against each file's `use ...Case, async: false` declaration.
 
 ## Reporting (Prompt 11): closing an activation must itself enqueue `GenerateReportWorker` — not stated by name in Task 5, required by FR-REP-01 and Document 08 section 4
 
@@ -466,7 +495,7 @@ Task 3 asked this channel to be more responsive than "the PowerSync gap document
 
 This lines up with, and gives a documented reason for, Prompt 10's own empirical finding ("PowerSync sync config (Prompt 10): device revocation has a JWT-expiry-bounded blind spot", above): a revoked device's still-unexpired token went on syncing via PowerSync until it naturally expired, because PowerSync had no channel to learn about the revocation early. `ActivationChannel`'s 5-minute self-check gives Salvorion's own real-time layer a capability PowerSync itself does not have and, per its own documentation, cannot have without a key rotation blunt enough to also log out every other user and device.
 
-## Consistency audit follow-up (Document 25): event attribution could be forged
+## Consistency audit follow-up (Document 25/26): event attribution could be forged
 
 `SalvorionWeb.EventController.create/2` built the attrs it passed to `Accountability.ingest_event/2` with `Map.put_new("recorded_by_id", conn.assigns.current_user_id, params)` — if the request body already contained a `recorded_by_id`, the client's value won, since `Map.put_new/3` only fills in a *missing* key. `Accountability.check_override_permitted/1` (the check gating the `override` kind to `osh_officer`/`admin`) authorises by looking up **that id's** role, not the authenticated caller's. The consequence: any authenticated warden could POST `kind: "override"` with `recorded_by_id` set to an OSH officer's id (visible to any warden via `GET /api/activations/:id`, whose `started_by_id` is always an officer) and the override would be accepted as if the officer had performed it — FR-ROLL-07's "OSH Officer or System Administrator" gate had no teeth. The same forgery attributed *any* event kind to anyone, not just overrides: a warden could make a sign-in, a roll-call mark, or a visitor registration read as recorded by a different user entirely, including the report's manual sign-in log (`recorded_by_email`). A similarly unvalidated `device_id` in the body could name any device on file, not just one belonging to the caller.
 
@@ -552,5 +581,10 @@ There is no pre-existing "three tiers" table in this file to update — the Prom
   domain model; Swoosh mailer kept for later email delivery.
 - PowerSync uses **Postgres** for sync-bucket storage (a separate database,
   `powersync_storage`, on the same Postgres 16 server), so no MongoDB container.
-- `docker/powersync/sync-config.yaml` is an empty Sync Streams (edition 3)
-  placeholder; real streams are defined once the domain schema lands.
+- `docker/powersync/sync-config.yaml` was, at scaffolding time, an empty
+  Sync Streams (edition 3) placeholder, with real streams deferred until
+  the domain schema landed. **Superseded by Prompt 10:** the file is no
+  longer empty or a placeholder — it now holds the full set of real stream
+  definitions (every `*_warden_*`, `people`, `activations`, `users`-via-
+  `sync_safe_users`-column-list, etc. — see the "PowerSync sync config
+  (Prompt 10)" entries above for the decisions made while writing them).
