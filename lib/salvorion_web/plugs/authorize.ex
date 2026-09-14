@@ -6,11 +6,12 @@ defmodule SalvorionWeb.Plugs.Authorize do
   Steps, in order:
 
     1. Read `Authorization: Bearer <token>`; verify signature (RS256), expiry,
-       `typ == "access"`, and (if the token carries a `device_id` claim) that
+       `typ == "access"`, that (if the token carries a `device_id` claim)
        the device is not revoked (`devices.revoked_at`, Document 10 section
-       4) — all via `Salvorion.Accounts.Guardian.verify_access_token/1`, the
+       4), and that the token's user is still `active` (Document 25, Task
+       7) — all via `Salvorion.Accounts.Guardian.verify_access_token/1`, the
        one place this logic lives; `SalvorionWeb.UserSocket` calls the same
-       function for the real-time layer. Missing/invalid/revoked -> 401.
+       function for the real-time layer. Missing/invalid/revoked/deactivated -> 401.
     2. Read the `role` claim (no database round-trip) and compare it with the
        roles allowed for the matched route. Not allowed -> 403.
 

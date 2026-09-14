@@ -51,6 +51,14 @@ defmodule SalvorionWeb.UserSocketTest do
       assert :error = connect(UserSocket, %{"token" => tokens.access_token})
     end
 
+    test "a deactivated user's token is refused (Document 25, Task 7)" do
+      user = user_fixture(%{role: "warden"})
+      {:ok, tokens} = Accounts.issue_tokens(user)
+      {:ok, _user} = Accounts.deactivate_user(user)
+
+      assert :error = connect(UserSocket, %{"token" => tokens.access_token})
+    end
+
     test "a missing token is refused" do
       assert :error = connect(UserSocket, %{})
     end

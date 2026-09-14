@@ -47,6 +47,9 @@ defmodule SalvorionWeb.Router do
     post "/warden-assignments", WardenAssignmentController, :create
     get "/warden-assignments", WardenAssignmentController, :index
 
+    get "/settings", SettingController, :index
+    patch "/settings/:key", SettingController, :update
+
     # --- Organisation (Task 4) ----------------------------------------------
     get "/faculties", FacultyController, :index
     post "/faculties", FacultyController, :create

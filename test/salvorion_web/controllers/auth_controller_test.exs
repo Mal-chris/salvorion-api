@@ -120,6 +120,18 @@ defmodule SalvorionWeb.AuthControllerTest do
       {:ok, _} = Accounts.revoke_device(device, actor: user)
       assert json_response(get(authed, ~p"/api/auth/me"), 401)
     end
+
+    test "rejects a still-unexpired token once its user has been deactivated (Document 25, Task 7)",
+         %{conn: conn} do
+      user = user_fixture()
+      {:ok, tokens} = Accounts.issue_tokens(user)
+      authed = put_req_header(conn, "authorization", "Bearer " <> tokens.access_token)
+
+      assert json_response(get(authed, ~p"/api/auth/me"), 200)
+
+      {:ok, _} = Accounts.deactivate_user(user, actor: user)
+      assert json_response(get(authed, ~p"/api/auth/me"), 401)
+    end
   end
 
   describe "GET /.well-known/jwks.json" do

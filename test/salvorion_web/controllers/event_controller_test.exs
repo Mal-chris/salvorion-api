@@ -4,7 +4,7 @@ defmodule SalvorionWeb.EventControllerTest do
   import Salvorion.AccountsFixtures
   import Salvorion.RosterFixtures
 
-  alias Salvorion.{Accountability, Activations, Audit}
+  alias Salvorion.{Accountability, Accounts, Activations, Audit, Locations}
 
   defp event_attrs(person, overrides \\ %{}) do
     Map.merge(
@@ -209,6 +209,34 @@ defmodule SalvorionWeb.EventControllerTest do
         |> post(
           ~p"/api/activations/#{activation.id}/events",
           event_attrs(person, %{device_id: their_device.id})
+        )
+
+      assert json_response(conn, 403)
+    end
+
+    test "a warden's roll_call mark on a person outside their zone scope is 403 :outside_warden_scope (Document 25/26, Task 4)",
+         %{conn: conn} do
+      officer = user_fixture(%{role: "osh_officer"})
+
+      zone5 = zone_fixture()
+      zone8 = zone_fixture()
+      {:ok, area8} = Locations.create_area(%{name: "Area 8", zone_id: zone8.id})
+      dept8 = department_fixture()
+      {:ok, _} = Locations.link_department_to_area(dept8, area8)
+      person8 = person_fixture(%{type: "staff", primary_department_id: dept8.id})
+
+      warden5 = user_fixture(%{role: "warden"})
+      {:ok, _} = Accounts.assign_warden(warden5.id, {:zone, zone5.id}, {~D[2020-01-01], nil})
+
+      {:ok, activation} =
+        Activations.start_activation(%{activation_type: "drill"}, actor: officer)
+
+      conn =
+        conn
+        |> authed(warden5)
+        |> post(
+          ~p"/api/activations/#{activation.id}/events",
+          event_attrs(person8, %{kind: "roll_call", status: "absent"})
         )
 
       assert json_response(conn, 403)

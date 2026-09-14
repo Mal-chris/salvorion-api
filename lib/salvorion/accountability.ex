@@ -248,9 +248,16 @@ defmodule Salvorion.Accountability do
   :duplicate}` for a replayed `client_uuid` (I3), or one of
   `{:error, :unknown_person | :activation_not_found |
   :activation_not_started | :activation_closed | :override_not_permitted
-  | changeset}`. Two events for the same person arriving together are
-  both stored (I1); a per-person advisory lock serialises the status
-  derivation so exactly one `PersonStatus` row results.
+  | :outside_warden_scope | changeset}`. `:outside_warden_scope` is
+  returned only for a `roll_call` event recorded by a `warden` whose
+  `WardenAssignment` rows (Document 10 §1, "Conduct roll call ... Own
+  assigned zone/area only"; Document 25/26 Task 4) don't cover the
+  target person — never for `scanned`/`manual`/`visitor_registered`
+  (sign-in anywhere is legitimate), and never for `admin`/`osh_officer`
+  (who have no scope restriction on any kind, including `roll_call`).
+  Two events for the same person arriving together are both stored
+  (I1); a per-person advisory lock serialises the status derivation so
+  exactly one `PersonStatus` row results.
   """
   @spec ingest_event(map, opts) ::
           {:ok, %AccountabilityEvent{}, %PersonStatus{}}
@@ -278,7 +285,8 @@ defmodule Salvorion.Accountability do
              Changeset.get_field(changeset, :kind),
              Changeset.get_field(changeset, :client_timestamp)
            ),
-         :ok <- check_override_permitted(changeset) do
+         :ok <- check_override_permitted(changeset),
+         :ok <- check_warden_roll_call_scope(changeset, activation) do
       insert_and_derive(changeset, activation, person.id, opts)
     else
       {:duplicate, event} -> {:ok, event, :duplicate}
@@ -350,6 +358,55 @@ defmodule Salvorion.Accountability do
     else
       :ok
     end
+  end
+
+  # Document 10 §1, "Conduct roll call ... Own assigned zone/area only"
+  # (Document 25/26, Task 4): a roll_call mark, specifically, recorded by
+  # a warden must target a person in that warden's own scope. Deliberately
+  # narrow to this one kind — sign-in (scanned/manual/visitor_registered)
+  # stays unrestricted (anyone can walk up to any assembly point), and
+  # override/contradiction_resolved are already admin/osh_officer-only
+  # via check_override_permitted/1 above, so this can never fire for a
+  # role that isn't a warden recording a roll_call.
+  defp check_warden_roll_call_scope(changeset, activation) do
+    if Changeset.get_field(changeset, :kind) == "roll_call" do
+      recorded_by_id = Changeset.get_field(changeset, :recorded_by_id)
+      person_id = Changeset.get_field(changeset, :person_id)
+
+      case Repo.get(User, recorded_by_id) do
+        %User{role: "warden"} = warden ->
+          if person_in_warden_scope?(warden, activation, person_id),
+            do: :ok,
+            else: {:error, :outside_warden_scope}
+
+        _ ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Whether `person_id` falls within `warden`'s scope for `activation`
+  (Document 25/26, Task 4) — the exact same rule `list_roll_call/2` uses
+  to build a warden's own roll-call list: `Scope.warden_scope/2` (pinned
+  to `activation.started_at`, per "a warden's scope is fixed at
+  activation start") plus the roster-or-event-location rule
+  (`Scope.in_scope_person_ids_query/2`, docs/DECISIONS.md, Prompt 7).
+  Reused rather than reimplemented, so "can this warden roll-call this
+  person" and "does this warden's own roll-call list show this person"
+  can never silently drift apart.
+  """
+  @spec person_in_warden_scope?(%User{}, %Activation{}, binary) :: boolean
+  def person_in_warden_scope?(%User{} = warden, %Activation{} = activation, person_id) do
+    scope = Scope.warden_scope(warden, activation)
+
+    Repo.exists?(
+      from p in Person,
+        where: p.id == ^person_id,
+        where: p.id in subquery(Scope.in_scope_person_ids_query(activation.id, scope))
+    )
   end
 
   defp insert_and_derive(changeset, activation, person_id, opts) do
@@ -598,48 +655,83 @@ defmodule Salvorion.Accountability do
   `opts[:actor]` is the recording user; `opts[:client_uuid]` and
   `opts[:client_timestamp]` may be supplied by an offline client, else
   generated here. Returns `{:error, :no_open_contradiction}` if there is
-  nothing to confirm.
+  nothing to confirm, or `{:error, :outside_warden_scope}` if
+  `opts[:actor]` is a warden whose scope doesn't cover `person_id`
+  (Document 10 §1, "Own assigned zone/area only"; Document 25/26 Task
+  4 — the same restriction `ingest_event/2` applies to a warden's
+  `roll_call` kind, applied here too since resolving a contradiction is
+  also part of "conducting" a roll call, not a separate action; admin
+  and osh_officer are unaffected, same as there).
   """
   @spec resolve_contradiction(binary, binary, opts) ::
           {:ok, %PersonStatus{}} | {:error, atom | Ecto.Changeset.t()}
   def resolve_contradiction(activation_id, person_id, opts \\ []) do
     ensure_not_nested!("resolve_contradiction/3")
 
-    replayed? =
-      case Keyword.get(opts, :client_uuid) do
-        nil -> false
-        uuid -> Repo.exists?(from e in AccountabilityEvent, where: e.client_uuid == ^uuid)
+    with :ok <- check_warden_resolution_scope(activation_id, person_id, opts) do
+      replayed? =
+        case Keyword.get(opts, :client_uuid) do
+          nil -> false
+          uuid -> Repo.exists?(from e in AccountabilityEvent, where: e.client_uuid == ^uuid)
+        end
+
+      case Repo.get_by(PersonStatus, activation_id: activation_id, person_id: person_id) do
+        %PersonStatus{} = status when replayed? ->
+          {:ok, status}
+
+        %PersonStatus{contradicting_event_id: id, contradiction_resolved_at: nil}
+        when is_binary(id) ->
+          attrs = %{
+            client_uuid: Keyword.get_lazy(opts, :client_uuid, &Ecto.UUID.generate/0),
+            client_timestamp: Keyword.get_lazy(opts, :client_timestamp, &DateTime.utc_now/0),
+            activation_id: activation_id,
+            person_id: person_id,
+            kind: "contradiction_resolved",
+            status: "present",
+            note: Keyword.get(opts, :note)
+          }
+
+          case ingest_event(attrs, Keyword.take(opts, [:actor])) do
+            {:ok, _event, %PersonStatus{} = status} ->
+              {:ok, status}
+
+            {:ok, _event, :duplicate} ->
+              {:ok,
+               Repo.get_by!(PersonStatus, activation_id: activation_id, person_id: person_id)}
+
+            {:error, _} = error ->
+              error
+          end
+
+        _ ->
+          {:error, :no_open_contradiction}
       end
+    end
+  end
 
-    case Repo.get_by(PersonStatus, activation_id: activation_id, person_id: person_id) do
-      %PersonStatus{} = status when replayed? ->
-        {:ok, status}
+  defp check_warden_resolution_scope(activation_id, person_id, opts) do
+    case actor_user(opts) do
+      %User{role: "warden"} = warden ->
+        case Repo.get(Activation, activation_id) do
+          nil ->
+            :ok
 
-      %PersonStatus{contradicting_event_id: id, contradiction_resolved_at: nil}
-      when is_binary(id) ->
-        attrs = %{
-          client_uuid: Keyword.get_lazy(opts, :client_uuid, &Ecto.UUID.generate/0),
-          client_timestamp: Keyword.get_lazy(opts, :client_timestamp, &DateTime.utc_now/0),
-          activation_id: activation_id,
-          person_id: person_id,
-          kind: "contradiction_resolved",
-          status: "present",
-          note: Keyword.get(opts, :note)
-        }
-
-        case ingest_event(attrs, Keyword.take(opts, [:actor])) do
-          {:ok, _event, %PersonStatus{} = status} ->
-            {:ok, status}
-
-          {:ok, _event, :duplicate} ->
-            {:ok, Repo.get_by!(PersonStatus, activation_id: activation_id, person_id: person_id)}
-
-          {:error, _} = error ->
-            error
+          %Activation{} = activation ->
+            if person_in_warden_scope?(warden, activation, person_id),
+              do: :ok,
+              else: {:error, :outside_warden_scope}
         end
 
       _ ->
-        {:error, :no_open_contradiction}
+        :ok
+    end
+  end
+
+  defp actor_user(opts) do
+    case Keyword.get(opts, :actor) do
+      %User{} = user -> user
+      id when is_binary(id) -> Repo.get(User, id)
+      _ -> nil
     end
   end
 

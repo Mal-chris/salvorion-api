@@ -181,6 +181,21 @@ defmodule SalvorionWeb.ActivationChannelTest do
       assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
+    test "a user deactivated mid-connection: :check_revocation pushes session_revoked and terminates the channel (Document 25, Task 7)",
+         %{activation: activation, w5: w5} do
+      {:ok, tokens} = Accounts.issue_tokens(w5)
+      {:ok, socket} = connect(UserSocket, %{"token" => tokens.access_token})
+      {:ok, _reply, socket} = subscribe_and_join(socket, "activation:#{activation.id}")
+
+      {:ok, _user} = Accounts.deactivate_user(w5)
+
+      ref = Process.monitor(socket.channel_pid)
+      send(socket.channel_pid, :check_revocation)
+
+      assert_push "session_revoked", %{}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
+    end
+
     test "a token whose own exp has already passed: :check_revocation pushes session_revoked and terminates the channel",
          %{activation: activation} do
       assigns = %{

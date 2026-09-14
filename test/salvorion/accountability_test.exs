@@ -7,7 +7,7 @@ defmodule Salvorion.AccountabilityTest do
   import Salvorion.AccountsFixtures
   import Salvorion.RosterFixtures
 
-  alias Salvorion.{Accountability, Activations, Audit, Locations, Settings}
+  alias Salvorion.{Accountability, Accounts, Activations, Audit, Locations, Settings}
   alias Salvorion.Accountability.{AccountabilityEvent, ExpectedPresence, PersonStatus}
 
   setup do
@@ -606,6 +606,108 @@ defmodule Salvorion.AccountabilityTest do
       Repo.delete_all(from a in Salvorion.Activations.Activation, where: a.id == ^activation.id)
       Repo.delete_all(from p in Salvorion.Roster.Person, where: p.id == ^person.id)
       Repo.delete_all(from u in Salvorion.Accounts.User, where: u.id == ^officer.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Warden roll-call scope enforcement (Document 25/26, Task 4)
+  # ---------------------------------------------------------------------------
+
+  describe "a warden's roll_call events and contradiction resolutions are scoped to their own zone" do
+    defp two_zone_topology do
+      zone5 = zone_fixture()
+      zone8 = zone_fixture()
+
+      {:ok, area5} = Locations.create_area(%{name: "Area 5", zone_id: zone5.id})
+      {:ok, area8} = Locations.create_area(%{name: "Area 8", zone_id: zone8.id})
+
+      dept5 = department_fixture()
+      dept8 = department_fixture()
+
+      {:ok, _} = Locations.link_department_to_area(dept5, area5)
+      {:ok, _} = Locations.link_department_to_area(dept8, area8)
+
+      person5 = person_fixture(%{type: "staff", primary_department_id: dept5.id})
+      person8 = person_fixture(%{type: "staff", primary_department_id: dept8.id})
+
+      %{zone5: zone5, zone8: zone8, person5: person5, person8: person8}
+    end
+
+    test "a Zone 5 warden's roll_call mark on a Zone 8 person is rejected; on a Zone 5 person it succeeds",
+         %{officer: officer} do
+      %{zone5: zone5, person5: person5, person8: person8} = two_zone_topology()
+      warden5 = user_fixture(%{role: "warden"})
+      {:ok, _} = Accounts.assign_warden(warden5.id, {:zone, zone5.id}, {~D[2020-01-01], nil})
+
+      activation = start_campus(officer)
+
+      assert {:error, :outside_warden_scope} =
+               Accountability.ingest_event(
+                 event_attrs(activation, person8, kind: "roll_call", status: "absent"),
+                 actor: warden5
+               )
+
+      assert {:ok, _event, %PersonStatus{status: "absent"}} =
+               Accountability.ingest_event(
+                 event_attrs(activation, person5, kind: "roll_call", status: "absent"),
+                 actor: warden5
+               )
+    end
+
+    test "the same warden's scan of the out-of-scope person still succeeds — sign-in is exempt",
+         %{officer: officer} do
+      %{zone5: zone5, person8: person8} = two_zone_topology()
+      warden5 = user_fixture(%{role: "warden"})
+      {:ok, _} = Accounts.assign_warden(warden5.id, {:zone, zone5.id}, {~D[2020-01-01], nil})
+
+      activation = start_campus(officer)
+
+      assert {:ok, _event, %PersonStatus{status: "present"}} =
+               Accountability.ingest_event(
+                 event_attrs(activation, person8, kind: "scanned"),
+                 actor: warden5
+               )
+    end
+
+    test "an admin's or osh_officer's roll_call mark is unaffected by any zone — they have no scope restriction",
+         %{officer: officer} do
+      %{person8: person8} = two_zone_topology()
+      admin = user_fixture(%{role: "admin"})
+
+      activation = start_campus(officer)
+
+      assert {:ok, _event, %PersonStatus{status: "absent"}} =
+               Accountability.ingest_event(
+                 event_attrs(activation, person8, kind: "roll_call", status: "absent"),
+                 actor: admin
+               )
+
+      assert {:ok, _event, %PersonStatus{status: "excused"}} =
+               Accountability.ingest_event(
+                 event_attrs(activation, person8, kind: "roll_call", status: "excused"),
+                 actor: officer
+               )
+    end
+
+    test "resolve_contradiction/3 is scoped the same way: a warden outside scope cannot resolve, admin can",
+         %{officer: officer} do
+      %{zone5: zone5, person8: person8} = two_zone_topology()
+      warden5 = user_fixture(%{role: "warden"})
+      {:ok, _} = Accounts.assign_warden(warden5.id, {:zone, zone5.id}, {~D[2020-01-01], nil})
+
+      activation = start_campus(officer)
+
+      ingest!(activation, person8, officer, kind: "scanned")
+      ingest!(activation, person8, officer, kind: "roll_call", status: "absent")
+      assert Accountability.count_open_contradictions(activation.id) == 1
+
+      assert {:error, :outside_warden_scope} =
+               Accountability.resolve_contradiction(activation.id, person8.id, actor: warden5)
+
+      assert {:ok, %PersonStatus{contradiction_resolved_at: at}} =
+               Accountability.resolve_contradiction(activation.id, person8.id, actor: officer)
+
+      refute is_nil(at)
     end
   end
 end

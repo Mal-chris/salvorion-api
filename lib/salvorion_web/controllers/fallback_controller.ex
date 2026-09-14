@@ -43,6 +43,11 @@ defmodule SalvorionWeb.FallbackController do
   def call(conn, {:error, :not_a_warden}), do: send_status(conn, :forbidden)
   def call(conn, {:error, :override_not_permitted}), do: send_status(conn, :forbidden)
 
+  # A warden's roll_call mark or contradiction resolution targeting
+  # someone outside their own zone/area assignments (Document 25/26,
+  # Task 4; Document 10 §1 "Own assigned zone/area only").
+  def call(conn, {:error, :outside_warden_scope}), do: send_status(conn, :forbidden)
+
   # A controller-level ownership check (Task 3's "admin, or the device's
   # own user" on POST /api/devices/:id/revoke) rather than a context
   # return value, but the same shape: authenticated, not permitted here.

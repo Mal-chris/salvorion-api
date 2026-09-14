@@ -8,10 +8,11 @@ defmodule SalvorionWeb.UserSocket do
   Authentication happens here, once, at connect time — not per channel
   join, and never re-derived: `Salvorion.Accounts.Guardian.verify_access_token/1`
   is the exact same check `SalvorionWeb.Plugs.Authorize` runs on every
-  HTTP request (signature, expiry, `typ == "access"`, and — if the token
-  carries one — that the `device_id` is not revoked). A connection that
-  fails this is rejected outright (`:error`); there is no path where a
-  socket is accepted and only rejected later at join, because a rejected
+  HTTP request (signature, expiry, `typ == "access"`, that the token's
+  `device_id` — if any — is not revoked, and that the token's user is
+  still `active`, Document 25 Task 7). A connection that fails this is
+  rejected outright (`:error`); there is no path where a socket is
+  accepted and only rejected later at join, because a rejected
   `connect/3` never gets far enough to attempt one.
   """
 

@@ -5,18 +5,16 @@ defmodule SalvorionWeb.PersonControllerTest do
   import Salvorion.RosterFixtures
 
   describe "GET /api/people" do
-    test "admin, osh_officer and warden can list; report_viewer gets 403", %{conn: conn} do
+    test "every role can list (Document 25/26, Task 1: directory information is visible to any authenticated role)",
+         %{conn: conn} do
       person_fixture()
 
-      for role <- ["admin", "osh_officer", "warden"] do
+      for role <- ["admin", "osh_officer", "warden", "report_viewer"] do
         user = user_fixture(%{role: role})
         conn = conn |> authed(user) |> get(~p"/api/people")
         assert %{"data" => [_ | _], "meta" => %{"total" => total}} = json_response(conn, 200)
         assert total >= 1
       end
-
-      viewer = user_fixture(%{role: "report_viewer"})
-      assert json_response(conn |> authed(viewer) |> get(~p"/api/people"), 403)
     end
 
     test "no token gets 401", %{conn: conn} do
@@ -57,6 +55,15 @@ defmodule SalvorionWeb.PersonControllerTest do
       assert %{"data" => %{"id" => id}} = json_response(conn, 200)
       assert id == person.id
     end
+
+    test "report_viewer can also fetch a person (Document 25/26, Task 1)", %{conn: conn} do
+      viewer = user_fixture(%{role: "report_viewer"})
+      person = person_fixture()
+
+      conn = conn |> authed(viewer) |> get(~p"/api/people/#{person.id}")
+      assert %{"data" => %{"id" => id}} = json_response(conn, 200)
+      assert id == person.id
+    end
   end
 
   describe "GET /api/people/lookup" do
@@ -65,6 +72,15 @@ defmodule SalvorionWeb.PersonControllerTest do
       person = person_fixture(%{id_number: "LOOKUP-1"})
 
       conn = conn |> authed(admin) |> get(~p"/api/people/lookup?id_number=LOOKUP-1")
+      assert %{"data" => %{"id" => id}} = json_response(conn, 200)
+      assert id == person.id
+    end
+
+    test "report_viewer can also look up by id_number (Document 25/26, Task 1)", %{conn: conn} do
+      viewer = user_fixture(%{role: "report_viewer"})
+      person = person_fixture(%{id_number: "LOOKUP-2"})
+
+      conn = conn |> authed(viewer) |> get(~p"/api/people/lookup?id_number=LOOKUP-2")
       assert %{"data" => %{"id" => id}} = json_response(conn, 200)
       assert id == person.id
     end

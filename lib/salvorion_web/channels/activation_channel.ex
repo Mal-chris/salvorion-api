@@ -55,8 +55,9 @@ defmodule SalvorionWeb.ActivationChannel do
   @unscoped_roles ~w(admin osh_officer report_viewer)
 
   # Task 3: how long a joined channel can go on pushing to a device that
-  # was revoked, or accepting a token that has since expired, before this
-  # self-check catches up. Not a documented FR/NFR number — a starting
+  # was revoked, a user who was deactivated, or accepting a token that
+  # has since expired, before this self-check catches up. Not a
+  # documented FR/NFR number — a starting
   # trade-off: shorter tightens the exposure window at the cost of one
   # more `devices` query per open channel every interval; 5 minutes costs
   # nothing measurable at this system's scale (a warden's shift, not a
@@ -102,8 +103,10 @@ defmodule SalvorionWeb.ActivationChannel do
 
   # Task 3's self-check, sent to this channel process by its own timer
   # (or directly by a test — see docs/DECISIONS.md). Re-verifies the
-  # device against `devices.revoked_at` fresh (revocation can happen at
-  # any moment) and expiry against the `exp` claim already decoded at
+  # device against `devices.revoked_at` and the user against
+  # `users.active` fresh each time (either can change at any moment —
+  # Document 25, Task 7 added the user check, symmetric with device
+  # revocation), and expiry against the `exp` claim already decoded at
   # connect time (Task 1) — never a full `Guardian.decode_and_verify/2`
   # re-run, since the signature was checked once already and cannot
   # change out from under an open connection.
@@ -126,7 +129,8 @@ defmodule SalvorionWeb.ActivationChannel do
 
   defp session_invalid?(socket) do
     device_revoked?(socket.assigns[:current_device_id]) or
-      token_expired?(socket.assigns[:token_claims])
+      token_expired?(socket.assigns[:token_claims]) or
+      Accounts.user_deactivated?(socket.assigns.current_user_id)
   end
 
   defp device_revoked?(nil), do: false

@@ -104,12 +104,16 @@ defmodule SalvorionWeb.RBAC do
     # Roster (Task 6)
     # ---------------------------------------------------------------------
 
-    # Directory information (§2), plus FR-SIGN-02/03: a warden needs the
-    # full roster for manual/name-search sign-in, not scoped to their own
-    # zone — anyone can walk up to any assembly point.
-    {"GET", "/api/people"} => [@admin, @osh, @warden],
-    {"GET", "/api/people/:id"} => [@admin, @osh, @warden],
-    {"GET", "/api/people/lookup"} => [@admin, @osh, @warden],
+    # Directory information (§2: "visible to any authenticated user role
+    # in the course of their duties") — widened to all four roles
+    # (Document 25/26, Task 1): report_viewer was excluded for no
+    # documented reason, and PowerSync's own sync config already
+    # replicates the full `people` table unconditionally to every role
+    # (`docker/powersync/sync-config.yaml`), so the HTTP route was
+    # narrower than the data a report_viewer's client already has.
+    {"GET", "/api/people"} => @all_roles,
+    {"GET", "/api/people/:id"} => @all_roles,
+    {"GET", "/api/people/lookup"} => @all_roles,
 
     # "Import roster data": Yes / No / No / No
     {"POST", "/api/roster-imports"} => [@admin],
@@ -178,14 +182,22 @@ defmodule SalvorionWeb.RBAC do
 
     # "View live dashboard": Yes / Yes / Own zone/area only / Yes
     # (read-only). The zone breakdown here is the whole-campus one (all
-    # zones), so it takes the same three roles as summary/departments/
-    # faculties/unaccounted; a warden's own-scope view is the roll-call
-    # routes above, not these.
+    # zones), so summary/departments/faculties/zones take the same three
+    # roles; a warden's own-scope view is the roll-call routes above,
+    # not these.
     {"GET", "/api/activations/:id/dashboard/summary"} => [@admin, @osh, @viewer],
     {"GET", "/api/activations/:id/dashboard/departments"} => [@admin, @osh, @viewer],
     {"GET", "/api/activations/:id/dashboard/faculties"} => [@admin, @osh, @viewer],
     {"GET", "/api/activations/:id/dashboard/zones"} => [@admin, @osh, @viewer],
-    {"GET", "/api/activations/:id/dashboard/unaccounted"} => [@admin, @osh, @viewer],
+
+    # Narrower than its four siblings above (Document 25/26, Task 2):
+    # "View unaccounted list (all zones)" is its own §1 row, and it is
+    # explicitly Report Viewer: **No** there — unlike the aggregate
+    # counts on the other four routes, this one names individuals still
+    # missing, in real time, during a live activation. report_viewer was
+    # previously admitted here by copying the other four dashboard
+    # routes' role list rather than reading this row on its own.
+    {"GET", "/api/activations/:id/dashboard/unaccounted"} => [@admin, @osh],
 
     # ---------------------------------------------------------------------
     # Reporting (Task 11) — Document 10 §1 "Manage report recipients":
@@ -200,6 +212,13 @@ defmodule SalvorionWeb.RBAC do
     {"GET", "/api/activations/:id/reports"} => [@admin, @osh, @viewer],
     {"GET", "/api/activations/:id/reports/:run_id/download"} => [@admin, @osh, @viewer],
     {"POST", "/api/activations/:id/reports/regenerate"} => [@admin, @osh],
+
+    # ---------------------------------------------------------------------
+    # Settings (Document 25/26, Task 5) — Document 10 §1 "Change system
+    # settings (e.g. accountability rule)": Yes / Yes / No / No.
+    # ---------------------------------------------------------------------
+    {"GET", "/api/settings"} => [@admin, @osh],
+    {"PATCH", "/api/settings/:key"} => [@admin, @osh],
 
     # ---------------------------------------------------------------------
     # Placeholder for a later prompt — no route exists for this yet.

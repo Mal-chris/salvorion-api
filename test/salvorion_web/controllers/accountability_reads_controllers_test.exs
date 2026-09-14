@@ -183,7 +183,7 @@ defmodule SalvorionWeb.AccountabilityReadsControllersTest do
   end
 
   describe "dashboard reads" do
-    test "admin, osh_officer, report_viewer can read all five; warden gets 403 on all five", %{
+    test "admin and osh_officer can read all five; warden gets 403 on all five", %{
       conn: conn
     } do
       officer = user_fixture(%{role: "osh_officer"})
@@ -199,7 +199,7 @@ defmodule SalvorionWeb.AccountabilityReadsControllersTest do
         ~p"/api/activations/#{activation.id}/dashboard/unaccounted"
       ]
 
-      for role <- ["admin", "osh_officer", "report_viewer"], route <- routes do
+      for role <- ["admin", "osh_officer"], route <- routes do
         user = user_fixture(%{role: role})
         assert json_response(conn |> authed(user) |> get(route), 200)
       end
@@ -209,6 +209,34 @@ defmodule SalvorionWeb.AccountabilityReadsControllersTest do
       for route <- routes do
         assert json_response(conn |> authed(warden) |> get(route), 403)
       end
+    end
+
+    test "report_viewer gets 200 on summary/departments/faculties/zones but 403 specifically on unaccounted (Document 25/26, Task 2)",
+         %{conn: conn} do
+      officer = user_fixture(%{role: "osh_officer"})
+
+      {:ok, activation} =
+        Activations.start_activation(%{activation_type: "drill"}, actor: officer)
+
+      viewer = user_fixture(%{role: "report_viewer"})
+
+      allowed_routes = [
+        ~p"/api/activations/#{activation.id}/dashboard/summary",
+        ~p"/api/activations/#{activation.id}/dashboard/departments",
+        ~p"/api/activations/#{activation.id}/dashboard/faculties",
+        ~p"/api/activations/#{activation.id}/dashboard/zones"
+      ]
+
+      for route <- allowed_routes do
+        assert json_response(conn |> authed(viewer) |> get(route), 200)
+      end
+
+      assert json_response(
+               conn
+               |> authed(viewer)
+               |> get(~p"/api/activations/#{activation.id}/dashboard/unaccounted"),
+               403
+             )
     end
 
     test "unaccounted list accepts department_id/faculty_id/zone_id/type filters, ignores an unknown one",

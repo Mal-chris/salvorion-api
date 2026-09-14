@@ -85,6 +85,20 @@ defmodule Salvorion.Accounts do
     end
   end
 
+  @doc """
+  True when the user does not exist or has `active: false` (Document 25,
+  Task 7 — the same symmetric treatment `device_revoked?/1` already gets:
+  a deactivated user's still-unexpired token must stop authenticating,
+  exactly like a revoked device's does).
+  """
+  @spec user_deactivated?(binary) :: boolean
+  def user_deactivated?(user_id) do
+    case get_user(user_id) do
+      %User{active: true} -> false
+      _ -> true
+    end
+  end
+
   @spec list_users() :: [%User{}]
   def list_users do
     User

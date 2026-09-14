@@ -47,15 +47,20 @@ defmodule Salvorion.Accounts.Guardian do
   @doc """
   Verifies an access token exactly as `SalvorionWeb.Plugs.Authorize` and
   `SalvorionWeb.UserSocket` both need to: decode/verify the JWT (RS256,
-  `typ == "access"`) and, if it carries a `device_id` claim, reject a
-  revoked device (Document 10, section 4). The one place both call this,
-  so an HTTP request and a long-lived channel connection can never drift
-  apart on what "a valid token" means.
+  `typ == "access"`), reject a revoked device if the token carries a
+  `device_id` claim (Document 10, section 4), and reject a deactivated
+  user (Document 25, Task 7 — the same symmetric treatment: a
+  deactivated user's still-unexpired token must stop authenticating,
+  not keep working for up to 15 minutes the way it did before this
+  check existed). The one place both call this, so an HTTP request and
+  a long-lived channel connection can never drift apart on what "a
+  valid token" means.
   """
   @spec verify_access_token(String.t()) :: {:ok, map} | {:error, term}
   def verify_access_token(token) do
     with {:ok, claims} <- decode_and_verify(token, %{"typ" => "access"}),
-         :ok <- check_device(claims) do
+         :ok <- check_device(claims),
+         :ok <- check_active(claims) do
       {:ok, claims}
     end
   end
@@ -65,4 +70,10 @@ defmodule Salvorion.Accounts.Guardian do
   end
 
   defp check_device(_claims), do: :ok
+
+  defp check_active(%{"sub" => user_id}) do
+    if Accounts.user_deactivated?(user_id), do: {:error, :user_deactivated}, else: :ok
+  end
+
+  defp check_active(_claims), do: :ok
 end
