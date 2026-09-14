@@ -54,3 +54,11 @@ $RECYCLE.BIN/
 
 # Guardian RS256 signing keys (dev keys are generated locally; never commit them)
 /priv/keys/
+
+# tools/powersync-verify (Prompt 10): a verification-only Node.js script,
+# not part of the application. node_modules and the local SQLite mirrors
+# it builds while testing sync scoping are dev artifacts, not source.
+/tools/powersync-verify/node_modules/
+/tools/powersync-verify/*.db
+/tools/powersync-verify/*.db-wal
+/tools/powersync-verify/*.db-shm

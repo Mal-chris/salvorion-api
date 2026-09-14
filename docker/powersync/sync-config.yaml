@@ -1,12 +1,451 @@
 # yaml-language-server: $schema=https://unpkg.com/@powersync/service-sync-rules@latest/schema/sync_rules.json
 #
-# PLACEHOLDER Sync Streams file. This is a minimal valid configuration that
-# syncs NOTHING. Real stream definitions are added in a later step, once the
-# domain schema is in place. See https://docs.powersync.com/sync/streams/overview
+# PowerSync Sync Streams (edition 3) for Salvorion (Prompt 10).
+#
+# Format confirmed against https://docs.powersync.com/sync/streams/overview,
+# https://docs.powersync.com/sync/supported-sql and
+# https://releases.powersync.com/announcements/sync-streams-are-now-generally-available
+# (GA 14 May 2026; journeyapps/powersync-service:1.26.0 postdates GA and
+# already ships with `config: edition: 3` support per the 1.20.0+ changelog).
+# Legacy bucket-based "Sync Rules" (`bucket_definitions:`) is NOT used here —
+# see docs/DECISIONS.md, "PowerSync sync config (Prompt 10): Sync Streams,
+# not Sync Rules" for the full citation trail and the empirical confirmation
+# from this container's own startup log.
+#
+# JWT claim access confirmed against https://docs.powersync.com/usage/sync-streams
+# and https://docs.powersync.com/sync/streams/examples:
+#   auth.user_id()        -> the verified JWT's `sub` claim (the users.id)
+#   auth.parameter('role') -> the verified JWT's `role` claim, set by
+#                             Salvorion.Accounts.Guardian.build_claims/3
+#
+# Query-engine restrictions that shaped every query below (Supported SQL,
+# https://docs.powersync.com/sync/supported-sql):
+#   - No UNION/GROUP BY/ORDER BY/LIMIT/aggregation of any kind.
+#   - No now()/CURRENT_DATE/CURRENT_TIMESTAMP or any non-deterministic
+#     function in a query that determines row/bucket membership (see
+#     docs/DECISIONS.md, "PowerSync sync config (Prompt 10): the warden's
+#     'currently effective' filter cannot be evaluated by the sync engine").
+#   - CTEs (`with:`) may reference base tables only, never another CTE.
+#   - A stream's multiple `queries:` entries must "filter on the same
+#     parameters in the same way" to merge into one stream, which is
+#     stricter than needed here; each independent condition below is
+#     therefore its own STREAM (all streams targeting the same table
+#     union their rows into the same client-side table — there is no
+#     requirement that they share one stream).
 #
 # Note: changes here are not hot-reloaded; restart the powersync container.
 
 config:
   edition: 3
 
-streams: {}
+streams:
+  # ---------------------------------------------------------------------
+  # Task 1: global reference data. Small, non-sensitive ("directory
+  # information", Document 10 section 2), unconditional for every
+  # authenticated role.
+  # ---------------------------------------------------------------------
+  faculties:
+    auto_subscribe: true
+    query: SELECT * FROM faculties
+
+  departments:
+    auto_subscribe: true
+    query: SELECT * FROM departments
+
+  programmes:
+    auto_subscribe: true
+    query: SELECT * FROM programmes
+
+  assembly_points:
+    auto_subscribe: true
+    query: SELECT * FROM assembly_points
+
+  zones:
+    auto_subscribe: true
+    query: SELECT * FROM zones
+
+  areas:
+    auto_subscribe: true
+    query: SELECT * FROM areas
+
+  department_areas:
+    auto_subscribe: true
+    query: SELECT * FROM department_areas
+
+  # `settings.key` (a string) is the primary key, not `id` - PowerSync's
+  # client-side row id is always a text column literally named `id`
+  # (https://docs.powersync.com/usage/sync-rules/client-id), so it must be
+  # aliased explicitly.
+  settings:
+    auto_subscribe: true
+    query: SELECT key AS id, value, inserted_at, updated_at FROM settings
+
+  # ---------------------------------------------------------------------
+  # Task 2: the full roster, unconditionally, for offline scan resolution
+  # (NFR-OFF-01). No column on `people` is sensitive enough to exclude
+  # (Document 10 section 2: directory information is Internal, not
+  # Restricted; purged visitors' anonymised names are not sensitive by
+  # design, Document 10 section 6).
+  # ---------------------------------------------------------------------
+  people:
+    auto_subscribe: true
+    query: SELECT * FROM people
+
+  # ---------------------------------------------------------------------
+  # Task 3: the requesting user's own safety-viewed row.
+  #
+  # Empirically confirmed this stream CANNOT select FROM the
+  # `sync_safe_users` view (priv/repo/migrations/
+  # 20260913000001_create_sync_safe_users_view.exs): PowerSync replicates
+  # off the Postgres `powersync` publication, and `CREATE PUBLICATION ...
+  # FOR ALL TABLES` (docker/postgres/init/01-powersync.sh) only ever
+  # includes base tables — a Postgres restriction, not a PowerSync one.
+  # `SELECT schemaname, tablename FROM pg_publication_tables WHERE
+  # pubname = 'powersync'` lists `users` but never `sync_safe_users`; a
+  # stream querying the view loaded without error but silently
+  # replicated zero rows (it never appears in this container's
+  # "Replicating ..." startup log at all, unlike every real table).
+  # See docs/DECISIONS.md, "PowerSync sync config (Prompt 10):
+  # sync_safe_users cannot be the sync source — a Postgres, not
+  # PowerSync, limitation" for the full empirical trail.
+  #
+  # The query below therefore selects from `users` directly, but repeats
+  # the view's own explicit, safe column list rather than `SELECT *` —
+  # `password_hash` is named nowhere in this file. The view itself stays
+  # in the schema purely as the second, reviewable barrier Task 3 asked
+  # for: it is not the sync source, but a column added to it is still a
+  # visible, intentional schema change a reviewer would catch, which was
+  # the actual point of building it.
+  # ---------------------------------------------------------------------
+  sync_safe_users:
+    auto_subscribe: true
+    query: |
+      SELECT id, email, role, active, inserted_at, updated_at
+      FROM users
+      WHERE id = auth.user_id()
+
+  # ---------------------------------------------------------------------
+  # Task 4: activations, unconditionally. Every role (warden included)
+  # needs to know whether a drill is active, and its type, without a
+  # network round-trip the moment one starts.
+  # ---------------------------------------------------------------------
+  activations:
+    auto_subscribe: true
+    query: SELECT * FROM activations
+
+  activation_zones:
+    auto_subscribe: true
+    query: SELECT * FROM activation_zones
+
+  # ---------------------------------------------------------------------
+  # Task 5: warden_assignments. admin/osh_officer see every row (for the
+  # future admin screen); a warden sees only their own rows. No date
+  # filtering: PowerSync's stream engine cannot evaluate wall-clock time
+  # (see the module comment above), so "own rows" here means every
+  # assignment ever made to this user, past, current and future, not
+  # just the currently-effective ones.
+  # ---------------------------------------------------------------------
+  warden_assignments_admin:
+    auto_subscribe: true
+    query: |
+      SELECT * FROM warden_assignments
+      WHERE (auth.parameter('role') = 'admin' OR auth.parameter('role') = 'osh_officer')
+
+  warden_assignments_own:
+    auto_subscribe: true
+    query: |
+      SELECT * FROM warden_assignments
+      WHERE user_id = auth.user_id()
+
+  # ---------------------------------------------------------------------
+  # Task 5: accountability_events, person_statuses, expected_presences.
+  #
+  # admin / osh_officer / report_viewer: full, unconditional access.
+  #
+  # warden: the union (across streams, per the note above) of:
+  #   (a) rows for people whose roster location - usual_area, or an area
+  #       linked via department_areas to any of the person's departments
+  #       (primary_department_id, or a person_departments row) - falls
+  #       within the warden's assignments (Accountability.Scope rule 1,
+  #       lib/salvorion/accountability/scope.ex person_area_pairs_query/0);
+  #       PLUS
+  #   (b) rows whose own area_id/assembly_point_id falls within the
+  #       warden's assignments (Scope rule 2's literal, queryable half -
+  #       walk-ins with no roster location).
+  #
+  # "Within the warden's assignments" is expanded the same way
+  # Scope.warden_scope/2 expands it: a zone assignment also covers every
+  # area in that zone; an area assignment also covers that area's zone.
+  # Each of the two `warden_*` CTEs below is self-contained (references
+  # only `warden_assignments`, never the other CTE), since a CTE cannot
+  # reference another CTE in this query engine.
+  # ---------------------------------------------------------------------
+
+  accountability_events_full:
+    auto_subscribe: true
+    query: |
+      SELECT * FROM accountability_events
+      WHERE (auth.parameter('role') = 'admin' OR auth.parameter('role') = 'osh_officer' OR auth.parameter('role') = 'report_viewer')
+
+  accountability_events_warden_usual_area:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT accountability_events.* FROM accountability_events
+      INNER JOIN people p ON p.id = accountability_events.person_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          p.usual_area_id IN (SELECT area_id FROM warden_areas)
+          OR p.usual_area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  accountability_events_warden_primary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT accountability_events.* FROM accountability_events
+      INNER JOIN people p ON p.id = accountability_events.person_id
+      INNER JOIN department_areas da ON da.department_id = p.primary_department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  accountability_events_warden_secondary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT accountability_events.* FROM accountability_events
+      INNER JOIN person_departments pd ON pd.person_id = accountability_events.person_id
+      INNER JOIN department_areas da ON da.department_id = pd.department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  accountability_events_warden_event_area:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT accountability_events.* FROM accountability_events
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          accountability_events.area_id IN (SELECT area_id FROM warden_areas)
+          OR accountability_events.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  accountability_events_warden_event_zone:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT accountability_events.* FROM accountability_events
+      INNER JOIN zones z ON z.assembly_point_id = accountability_events.assembly_point_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          z.id IN (SELECT zone_id FROM warden_zones)
+          OR z.id IN (SELECT zone_id FROM areas WHERE id IN (SELECT area_id FROM warden_areas))
+        )
+
+  person_statuses_full:
+    auto_subscribe: true
+    query: |
+      SELECT * FROM person_statuses
+      WHERE (auth.parameter('role') = 'admin' OR auth.parameter('role') = 'osh_officer' OR auth.parameter('role') = 'report_viewer')
+
+  person_statuses_warden_usual_area:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT person_statuses.* FROM person_statuses
+      INNER JOIN people p ON p.id = person_statuses.person_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          p.usual_area_id IN (SELECT area_id FROM warden_areas)
+          OR p.usual_area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  person_statuses_warden_primary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT person_statuses.* FROM person_statuses
+      INNER JOIN people p ON p.id = person_statuses.person_id
+      INNER JOIN department_areas da ON da.department_id = p.primary_department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  person_statuses_warden_secondary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT person_statuses.* FROM person_statuses
+      INNER JOIN person_departments pd ON pd.person_id = person_statuses.person_id
+      INNER JOIN department_areas da ON da.department_id = pd.department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  # (b), approximated via the status's own `source_event_id` - see
+  # docs/DECISIONS.md, "PowerSync sync config (Prompt 10): person_statuses'
+  # event-location rule uses source_event_id, not every event" for why
+  # this is narrower than Scope's own any-event-in-the-activation check.
+  person_statuses_warden_event_area:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT person_statuses.* FROM person_statuses
+      INNER JOIN accountability_events ON accountability_events.id = person_statuses.source_event_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          accountability_events.area_id IN (SELECT area_id FROM warden_areas)
+          OR accountability_events.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  person_statuses_warden_event_zone:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT person_statuses.* FROM person_statuses
+      INNER JOIN accountability_events ON accountability_events.id = person_statuses.source_event_id
+      INNER JOIN zones z ON z.assembly_point_id = accountability_events.assembly_point_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          z.id IN (SELECT zone_id FROM warden_zones)
+          OR z.id IN (SELECT zone_id FROM areas WHERE id IN (SELECT area_id FROM warden_areas))
+        )
+
+  # expected_presences has no location column of its own and is only ever
+  # populated from roster location (Accountability.initialise_for_activation/1
+  # - staff by usual_area/department_areas; signed-in-only students and
+  # visitors get no row) or left empty under "all_enrolled". Rule (b) is
+  # therefore a no-op here by construction, not a gap: a walk-in with no
+  # roster location is never an expected_presences row to begin with. See
+  # docs/DECISIONS.md.
+  expected_presences_full:
+    auto_subscribe: true
+    query: |
+      SELECT * FROM expected_presences
+      WHERE (auth.parameter('role') = 'admin' OR auth.parameter('role') = 'osh_officer' OR auth.parameter('role') = 'report_viewer')
+
+  expected_presences_warden_usual_area:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT expected_presences.* FROM expected_presences
+      INNER JOIN people p ON p.id = expected_presences.person_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          p.usual_area_id IN (SELECT area_id FROM warden_areas)
+          OR p.usual_area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  expected_presences_warden_primary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT expected_presences.* FROM expected_presences
+      INNER JOIN people p ON p.id = expected_presences.person_id
+      INNER JOIN department_areas da ON da.department_id = p.primary_department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )
+
+  expected_presences_warden_secondary_dept:
+    auto_subscribe: true
+    with:
+      warden_areas: |
+        SELECT area_id AS area_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND area_id IS NOT NULL
+      warden_zones: |
+        SELECT zone_id AS zone_id FROM warden_assignments
+        WHERE user_id = auth.user_id() AND zone_id IS NOT NULL
+    query: |
+      SELECT expected_presences.* FROM expected_presences
+      INNER JOIN person_departments pd ON pd.person_id = expected_presences.person_id
+      INNER JOIN department_areas da ON da.department_id = pd.department_id
+      WHERE auth.parameter('role') = 'warden'
+        AND (
+          da.area_id IN (SELECT area_id FROM warden_areas)
+          OR da.area_id IN (SELECT id FROM areas WHERE zone_id IN (SELECT zone_id FROM warden_zones))
+        )

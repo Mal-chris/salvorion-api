@@ -1,0 +1,11 @@
+{
+  "name": "powersync-verify",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Verification-only PowerSync test client for Prompt 10 (not part of the application; see the README in this directory).",
+  "type": "module",
+  "dependencies": {
+    "@powersync/node": "^0.21.0",
+    "better-sqlite3": "^12.11.1"
+  }
+}
