@@ -27,6 +27,28 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Reporting's render_report_pdf/1 (Prompt 11) calls this over real
+      # HTTP; docker-compose.yml's own gotenberg service is the reference
+      # for image and port. This job has no top-level `container:` key, so
+      # it runs directly on the runner (not itself inside a container) —
+      # per GitHub's own docs, a service in that mode is reached via
+      # `localhost:<mapped-port>` on the runner, not via the service name
+      # as a hostname (that mapping is only automatic when the job *also*
+      # runs in a container, sharing its private network with services).
+      # `localhost:3000` is already config.exs's compiled-in
+      # `:gotenberg_url` default for every environment including test, so
+      # mapping the container's port 3000 straight to the runner's 3000
+      # needs no config change.
+      gotenberg:
+        image: gotenberg/gotenberg:8
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd "curl -f http://localhost:3000/health || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
