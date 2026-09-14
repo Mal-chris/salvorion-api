@@ -28,7 +28,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Erlang/Elixir (versions from .tool-versions)
         uses: erlef/setup-beam@v1
@@ -37,7 +37,7 @@ jobs:
           version-type: strict
 
       - name: Cache deps and build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             deps
@@ -53,6 +53,18 @@ jobs:
 
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
+
+      # Guardian signs JWTs with RS256, which needs a real RSA key pair on
+      # disk (Salvorion.Accounts.Keys.load!/0 raises at application boot
+      # without one). priv/keys/ is git-ignored on purpose (docs/DECISIONS.md,
+      # "Guardian must use an asymmetric signing key") — never commit a real
+      # key, generate a throwaway one per CI run instead, identical to the
+      # local dev setup (lib/salvorion/accounts/keys.ex's own error message).
+      - name: Generate a throwaway RSA signing key pair for this CI run
+        run: |
+          mkdir -p priv/keys
+          openssl genrsa -out priv/keys/dev_private.pem 2048
+          openssl rsa -in priv/keys/dev_private.pem -pubout -out priv/keys/dev_public.pem
 
       - name: Run tests
         run: mix test
