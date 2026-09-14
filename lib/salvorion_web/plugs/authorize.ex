@@ -5,11 +5,13 @@ defmodule SalvorionWeb.Plugs.Authorize do
 
   Steps, in order:
 
-    1. Read `Authorization: Bearer <token>`; verify signature (RS256), expiry
-       and `typ == "access"`. Missing/invalid -> 401.
-    2. If the token carries a `device_id` claim, check the device is not
-       revoked (`devices.revoked_at`, Document 10 section 4). Revoked -> 401.
-    3. Read the `role` claim (no database round-trip) and compare it with the
+    1. Read `Authorization: Bearer <token>`; verify signature (RS256), expiry,
+       `typ == "access"`, and (if the token carries a `device_id` claim) that
+       the device is not revoked (`devices.revoked_at`, Document 10 section
+       4) — all via `Salvorion.Accounts.Guardian.verify_access_token/1`, the
+       one place this logic lives; `SalvorionWeb.UserSocket` calls the same
+       function for the real-time layer. Missing/invalid/revoked -> 401.
+    2. Read the `role` claim (no database round-trip) and compare it with the
        roles allowed for the matched route. Not allowed -> 403.
 
   Roles come from one of two places, in this order of precedence:
@@ -29,7 +31,6 @@ defmodule SalvorionWeb.Plugs.Authorize do
 
   import Plug.Conn
 
-  alias Salvorion.Accounts
   alias Salvorion.Accounts.Guardian
   alias SalvorionWeb.RBAC
 
@@ -39,8 +40,7 @@ defmodule SalvorionWeb.Plugs.Authorize do
   @impl true
   def call(conn, opts) do
     with {:ok, token} <- fetch_bearer(conn),
-         {:ok, claims} <- Guardian.decode_and_verify(token, %{"typ" => "access"}),
-         :ok <- check_device(claims),
+         {:ok, claims} <- Guardian.verify_access_token(token),
          :ok <- check_role(conn, claims, opts) do
       conn
       |> assign(:current_user_id, claims["sub"])
@@ -60,12 +60,6 @@ defmodule SalvorionWeb.Plugs.Authorize do
       _ -> {:error, :missing_token}
     end
   end
-
-  defp check_device(%{"device_id" => device_id}) when is_binary(device_id) do
-    if Accounts.device_revoked?(device_id), do: {:error, :device_revoked}, else: :ok
-  end
-
-  defp check_device(_claims), do: :ok
 
   defp check_role(conn, %{"role" => role}, opts) when is_binary(role) do
     allowed =

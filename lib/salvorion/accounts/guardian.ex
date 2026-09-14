@@ -43,4 +43,26 @@ defmodule Salvorion.Accounts.Guardian do
 
     {:ok, claims}
   end
+
+  @doc """
+  Verifies an access token exactly as `SalvorionWeb.Plugs.Authorize` and
+  `SalvorionWeb.UserSocket` both need to: decode/verify the JWT (RS256,
+  `typ == "access"`) and, if it carries a `device_id` claim, reject a
+  revoked device (Document 10, section 4). The one place both call this,
+  so an HTTP request and a long-lived channel connection can never drift
+  apart on what "a valid token" means.
+  """
+  @spec verify_access_token(String.t()) :: {:ok, map} | {:error, term}
+  def verify_access_token(token) do
+    with {:ok, claims} <- decode_and_verify(token, %{"typ" => "access"}),
+         :ok <- check_device(claims) do
+      {:ok, claims}
+    end
+  end
+
+  defp check_device(%{"device_id" => device_id}) when is_binary(device_id) do
+    if Accounts.device_revoked?(device_id), do: {:error, :device_revoked}, else: :ok
+  end
+
+  defp check_device(_claims), do: :ok
 end

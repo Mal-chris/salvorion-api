@@ -228,6 +228,21 @@ defmodule Salvorion.Activations do
   def get_activation!(id), do: Repo.get!(Activation, id)
 
   @doc """
+  Like `get_activation!/1`, but `nil` for a missing id or one that isn't
+  even a valid UUID, instead of raising — for callers that take an id
+  from somewhere less trusted than a route already matched by the router
+  (`SalvorionWeb.ActivationChannel`'s topic, `"activation:<id>"`, is
+  whatever a connected client sends).
+  """
+  @spec get_activation(binary) :: %Activation{} | nil
+  def get_activation(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> Repo.get(Activation, uuid)
+      :error -> nil
+    end
+  end
+
+  @doc """
   Lists activations, most recently started first.
 
   Filters (all optional, as a keyword list or map):

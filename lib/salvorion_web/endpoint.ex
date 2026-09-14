@@ -15,6 +15,11 @@ defmodule SalvorionWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # Real-time layer (Prompt 12): out-of-band pushes only, never row
+  # replication (Document 07 section 2) — PowerSync remains the source
+  # of truth a client reads.
+  socket "/socket", SalvorionWeb.UserSocket, websocket: true
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),
